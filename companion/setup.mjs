@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, copyFile, lstat, mkdir, realpath } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { selectLead } from '../shared/setup.mjs';
+import { inspect } from '../shared/settings.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -137,21 +137,14 @@ export async function install(directory, args = [], agents = [], selectedLead = 
   return result;
 }
 
-function discoverViaCli(cwd, endpoint) {
-  const query = new URLSearchParams({ 'location[directory]': cwd });
-  const out = execFileSync('opencode', ['api', 'get', `${endpoint}?${query}`], { encoding: 'utf8', cwd, maxBuffer: 16 << 20 });
-  const catalog = JSON.parse(out);
-  if (catalog.location?.directory !== cwd || !catalog.data?.length) throw Error('Project catalog is not ready; no files changed.');
-  return catalog.data;
-}
-
 async function main() {
   const cwd = await realpath(process.cwd());
   let agents = [];
   let models = [];
   try {
-    agents = discoverViaCli(cwd, '/api/agent');
-    models = discoverViaCli(cwd, '/api/model');
+    const info = await inspect(cwd);
+    agents = info.agents;
+    models = info.models;
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

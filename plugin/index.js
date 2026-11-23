@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 // shared/settings.mjs
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 var SETTINGS_KEYS = Object.freeze([
@@ -79,9 +80,12 @@ function effectiveSettings(project, global) {
 function sourcesFor(project, global) {
   const result = {};
   for (const key of SETTINGS_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(project, key) && project[key] !== undefined) {
+    const value = Object.prototype.hasOwnProperty.call(project, key) ? project[key] : global[key];
+    if (value === null || value === undefined) {
+      result[key] = "host";
+    } else if (Object.prototype.hasOwnProperty.call(project, key)) {
       result[key] = "project";
-    } else if (Object.prototype.hasOwnProperty.call(global, key) && global[key] !== undefined) {
+    } else if (Object.prototype.hasOwnProperty.call(global, key)) {
       result[key] = "global";
     } else {
       result[key] = "host";
@@ -89,8 +93,54 @@ function sourcesFor(project, global) {
   }
   return result;
 }
+function sameDirectory(left, right) {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return left === right;
+  }
+}
+function addLocation(endpoint, directory) {
+  return `${endpoint}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
+}
+function apiCall(method, endpoint, body) {
+  const args = ["api", method.toUpperCase(), endpoint];
+  if (body !== undefined)
+    args.push("--data", JSON.stringify(body));
+  const stdout = execFileSync("opencode", args, {
+    encoding: "utf8",
+    timeout: 30000,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  return JSON.parse(stdout);
+}
+async function warmLocation(directory) {
+  let sessionId = null;
+  try {
+    const created = apiCall("POST", "/api/session", {
+      location: { directory },
+      title: "Agent Office discovery"
+    });
+    sessionId = created?.data?.id ?? null;
+    for (let attempt = 0;attempt < 24; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const agents = await apiGet("/api/agent", directory);
+      if (Array.isArray(agents?.data) && agents.data.length > 0)
+        return agents;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (sessionId) {
+      try {
+        apiCall("DELETE", `/api/session/${encodeURIComponent(sessionId)}`);
+      } catch {}
+    }
+  }
+}
 async function apiGet(endpoint, directory) {
-  const url = `${endpoint}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
+  const url = addLocation(endpoint, directory);
   let lastError = null;
   for (let attempt = 0;attempt < 2; attempt += 1) {
     try {
@@ -100,7 +150,7 @@ async function apiGet(endpoint, directory) {
         stdio: ["ignore", "pipe", "pipe"]
       });
       const parsed = JSON.parse(stdout);
-      if (!parsed || typeof parsed !== "object" || !parsed.location || parsed.location.directory !== directory) {
+      if (!parsed || typeof parsed !== "object" || !parsed.location || !sameDirectory(parsed.location.directory, directory)) {
         return null;
       }
       return parsed;
@@ -136,7 +186,10 @@ async function inspect(directory) {
   if (typeof directory !== "string" || directory.length === 0) {
     throw new Error("A project directory is required.");
   }
-  const agentResponse = await apiGet("/api/agent", directory);
+  let agentResponse = await apiGet("/api/agent", directory);
+  if (!Array.isArray(agentResponse?.data) || agentResponse.data.length === 0) {
+    agentResponse = await warmLocation(directory);
+  }
   const modelResponse = await apiGet("/api/model", directory);
   const pluginResponse = await apiGet("/api/plugin", directory);
   const agents = Array.isArray(agentResponse?.data) ? agentResponse.data.map(sanitizeAgent) : [];

@@ -1,6 +1,6 @@
 {
   "name": "agent-office",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "An office for your OpenCode team, in OpenChamber and the terminal.",
@@ -61,5 +61,13 @@
   "dependencies": {
     "@openchamber/sdk": "2.8.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/b4db1n/agent-office.git"
+  },
+  "homepage": "https://github.com/b4db1n/agent-office#readme",
+  "bugs": {
+    "url": "https://github.com/b4db1n/agent-office/issues"
+  }
 }

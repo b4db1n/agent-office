@@ -39,4 +39,4 @@ bun test
 bun run check
 ```
 
-The extension loads the committed JavaScript bundles. When changing source, rebuild before installing or publishing. Do not include runtime state, personal configuration, screenshots or transcripts in a contribution.
+The extension loads the committed JavaScript bundles. When changing source, rebuild before installing or publishing. `bun test` runs the non-browser suite; the Office interaction checks need Playwright installed separately and `PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node --test tests/panel.test.mjs`. They skip when Playwright is unavailable. Do not include runtime state, personal configuration, screenshots or transcripts in a contribution.

@@ -1,0 +1,32 @@
+{
+  "name": "agent-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "An office for your OpenCode team, in OpenChamber and the terminal.",
+  "bin": { "agent-office": "./companion/cli.mjs" },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": { "openchamber": ">=2.8.0" },
+    "id": "agent-office",
+    "name": "Agent Office",
+    "icon": "team",
+    "contributes": {
+      "panel": { "entry": "panel/index.html" },
+      "statusSection": { "entry": "panel/index.html", "title": "Agent Office", "requiresProject": true },
+      "background": { "entry": "background/index.html" },
+      "actions": [
+        { "id": "dispatch", "label": "Ask Office lead", "where": "message", "roles": ["user"], "mode": "background" }
+      ],
+      "opencodePlugin": "plugin",
+      "capabilities": ["sessions"],
+      "service": { "entry": "service/main.js", "runtime": "host", "permissions": { "exec": ["opencode"] } }
+    }
+  },
+  "scripts": {
+    "build": "openchamber-guest-bundle panel/main.ts panel/main.js && openchamber-guest-bundle background/main.ts background/main.js && openchamber-guest-bundle --node service/main.ts service/main.js && bun build plugin/source.ts --target=node --format=esm --outfile=plugin/index.js",
+    "test": "bun test",
+    "check": "openchamber-guest-check"
+  },
+  "dependencies": { "@openchamber/sdk": "2.8.0" }
+}

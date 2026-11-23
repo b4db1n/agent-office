@@ -4,23 +4,53 @@
   "private": true,
   "type": "module",
   "description": "An office for your OpenCode team, in OpenChamber and the terminal.",
-  "bin": { "agent-office": "./companion/cli.mjs" },
+  "bin": {
+    "agent-office": "./companion/cli.mjs"
+  },
   "openchamber": {
     "apiVersion": 1,
-    "engines": { "openchamber": ">=2.8.0" },
+    "engines": {
+      "openchamber": ">=2.8.0"
+    },
     "id": "agent-office",
     "name": "Agent Office",
     "icon": "team",
     "contributes": {
-      "panel": { "entry": "panel/index.html" },
-      "statusSection": { "entry": "panel/index.html", "title": "Agent Office", "requiresProject": true },
-      "background": { "entry": "background/index.html" },
+      "panel": {
+        "entry": "panel/index.html"
+      },
+      "statusSection": {
+        "entry": "panel/index.html",
+        "title": "Agent Office",
+        "requiresProject": true
+      },
+      "background": {
+        "entry": "background/index.html"
+      },
       "actions": [
-        { "id": "dispatch", "label": "Ask Office lead", "where": "message", "roles": ["user"], "mode": "background" }
+        {
+          "id": "dispatch",
+          "label": "Ask Office lead",
+          "where": "message",
+          "roles": [
+            "user"
+          ],
+          "mode": "background"
+        }
       ],
       "opencodePlugin": "plugin",
-      "capabilities": ["sessions"],
-      "service": { "entry": "service/main.js", "runtime": "host", "permissions": { "exec": ["opencode"] } }
+      "capabilities": [
+        "sessions"
+      ],
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host",
+        "permissions": {
+          "exec": [
+            "opencode"
+          ]
+        }
+      }
     }
   },
   "scripts": {
@@ -28,5 +58,8 @@
     "test": "bun test",
     "check": "openchamber-guest-check"
   },
-  "dependencies": { "@openchamber/sdk": "2.8.0" }
+  "dependencies": {
+    "@openchamber/sdk": "2.8.0"
+  },
+  "license": "MIT"
 }

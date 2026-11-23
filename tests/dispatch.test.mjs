@@ -33,7 +33,7 @@ async function makeFixture(extraModels = []) {
   };
 }
 
-function fakeRunner(fixture, calls) {
+function fakeRunner(fixture, calls, hook = null) {
   return async (_command, args) => {
     const line = args.join(' ');
     calls.push(line);
@@ -43,11 +43,19 @@ function fakeRunner(fixture, calls) {
     if (args[1] === 'POST' && args[2] === '/api/session') {
       return { stdout: JSON.stringify({ data: { id: 'ses_test123' } }) };
     }
-    if (line.includes('/prompt')) return { stdout: '{}' };
+    if (line.includes('/prompt')) {
+      if (hook?.entered) hook.entered();
+      if (hook?.gate) await hook.gate;
+      return { stdout: '{}' };
+    }
     if (args[1] === 'GET' && args[2]?.startsWith('/api/session/')) {
       return {
         stdout: JSON.stringify({
-          data: { id: 'ses_test123', location: { directory: fixture.dir }, outcome: 'succeeded' },
+          data: {
+            id: 'ses_test123',
+            location: { directory: fixture.dir },
+            outcome: hook?.sessionRunning ? null : 'succeeded',
+          },
         }),
       };
     }
@@ -142,6 +150,51 @@ test('the ledger lives in private user state, not the project', async () => {
     );
     assert.equal(ledger.roots.length, 1);
     assert.equal(ledger.roots[0].sessionId, 'ses_test123');
+  } finally {
+    await cleanup(fixture);
+  }
+});
+
+test('dispatch refuses a paid model over a tiny budget', async () => {
+  const fixture = await makeFixture([
+    { id: 'paid', modelID: 'paid', providerID: 'p', enabled: true, cost: [{ input: 1, output: 1 }] },
+  ]);
+  try {
+    await configure(fixture, { leadModel: 'p/paid', budget: 0.001 });
+    await assert.rejects(
+      dispatch(fixture.dir, 'do work', {
+        run: fakeRunner(fixture, []),
+        inspectFn: () => fixture.inspectFn(),
+      }),
+      /Budget exceeded/,
+    );
+  } finally {
+    await cleanup(fixture);
+  }
+});
+
+test('parallelism limit refuses a second live dispatch', async () => {
+  const fixture = await makeFixture();
+  try {
+    await configure(fixture, { parallelism: 1 });
+    let release;
+    let entered;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const atPrompt = new Promise((resolve) => { entered = resolve; });
+    const first = dispatch(fixture.dir, 'first task', {
+      run: fakeRunner(fixture, [], { gate, entered, sessionRunning: true }),
+      inspectFn: () => fixture.inspectFn(),
+    });
+    await atPrompt;
+    await assert.rejects(
+      dispatch(fixture.dir, 'second task', {
+        run: fakeRunner(fixture, [], { sessionRunning: true }),
+        inspectFn: () => fixture.inspectFn(),
+      }),
+      /Parallelism limit/,
+    );
+    release();
+    assert.equal((await first).sessionId, 'ses_test123');
   } finally {
     await cleanup(fixture);
   }

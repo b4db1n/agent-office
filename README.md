@@ -2,6 +2,8 @@
 
 Agent Office shows the people and processes behind a coding task: the selected lead, its actual child sessions, who needs an answer, and which work has a result. Use your existing OpenCode provider and models. No Office account or hosted service is required.
 
+[Install Agent Office](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2Fb4db1n%2Fagent-office)
+
 ## Start here
 
 1. In OpenChamber **Settings → Extensions**, add this repository and review its permissions. Enable **Agent Office** in **Work Status → Panel Sections**.

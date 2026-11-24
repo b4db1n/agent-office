@@ -24,6 +24,9 @@ discoverable and keep it exercising `service/main.js`, not a mock.
 
 **Done when:** `bun test` includes it, it passes, and the full suite still passes.
 
+**DONE** — 4ac28db. `bun test` now reports 146 pass across 12 files, including the
+smoke test, and the original undiscovered file is gone.
+
 ### 2. The browser suite is skipped in CI
 `tests/panel.test.mjs` skips every panel test when Playwright is absent, and CI does not
 install it, so the entire UI is untested on every push.

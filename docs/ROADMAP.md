@@ -14,6 +14,8 @@ check is reverted, not patched until it looks green.
    publishing outside this repository.
 4. A behaviour change needs a test that fails before it and passes after it. A UI change
    needs the browser suite, not a claim.
+5. An item must be provable without pushing. A job that only runs in CI is written in the
+   same pass but is proven by the next push, and is not called done before that.
 
 ## Now
 
@@ -27,12 +29,13 @@ discoverable and keep it exercising `service/main.js`, not a mock.
 **DONE** — 4ac28db. `bun test` now reports 146 pass across 12 files, including the
 smoke test, and the original undiscovered file is gone.
 
-### 2. The browser suite is skipped in CI
-`tests/panel.test.mjs` skips every panel test when Playwright is absent, and CI does not
-install it, so the entire UI is untested on every push.
+### 2. The browser suite never runs
+`tests/panel.test.mjs` skips every panel test when Playwright is absent, and nothing installs
+it, so the whole UI is untested locally and on every push.
 
-**Done when:** CI installs Playwright and Chromium and runs the panel suite; a deliberate
-break in `panel/main.ts` makes the job fail.
+**Done when:** a documented command installs Chromium and runs the panel suite, the suite
+passes, and a deliberate break in `panel/main.ts` makes it fail. The CI job is added in the
+same pass; it counts as done only after a push proves it.
 
 ### 3. Controls that do nothing are shown as if they work
 `panel/main.ts` renders `language` and `notifications` inputs while the same file admits

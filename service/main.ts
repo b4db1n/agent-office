@@ -4,6 +4,8 @@ import { realpath } from 'node:fs/promises';
 import { inspect, saveSettings } from '../shared/settings.mjs';
 import { dispatch, admissionView } from '../shared/dispatch.mjs';
 import { usage } from '../shared/usage.mjs';
+import { readProjectJournal } from '../shared/lessons.mjs';
+import { startReview, collectReview } from '../shared/advisor.mjs';
 import { officeError, runOpenCode } from '../shared/host.mjs';
 
 const port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
@@ -17,7 +19,7 @@ http.createServer(async (req, res) => {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
   if (req.headers.authorization !== `Bearer ${token}`) return void reply(401, {});
   if (req.method === 'GET' && req.url === '/health') return void reply(200, { ok: true });
-  if (req.method !== 'POST' || !['/inspect', '/records', '/settings', '/dispatch', '/usage'].includes(req.url ?? '')) return void reply(404, {});
+  if (req.method !== 'POST' || !['/inspect', '/records', '/settings', '/dispatch', '/usage', '/journal', '/advisor/start', '/advisor/collect'].includes(req.url ?? '')) return void reply(404, {});
   try {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -46,6 +48,17 @@ http.createServer(async (req, res) => {
         status: result.status,
       });
     }
+    if (req.url === '/journal') {
+      return void reply(200, { departments: await readProjectJournal(await realpath(data.directory)) });
+    }
+    if (req.url === '/advisor/start') {
+      if (typeof data.departmentId !== 'string' || !data.departmentId) throw new Error('Select a department.');
+      return void reply(200, await startReview(await realpath(data.directory), data.departmentId, { run: runOpenCode }));
+    }
+    if (req.url === '/advisor/collect') {
+      if (typeof data.sessionId !== 'string' || !data.sessionId) throw new Error('Select an advisor session.');
+      return void reply(200, await collectReview(await realpath(data.directory), data.sessionId, { run: runOpenCode }));
+    }
     if (typeof data.prompt !== 'string' || !data.prompt.trim() || data.prompt.length > 32000) throw new Error('Choose a message of 1–32,000 characters.');
     const origin = typeof data.origin?.sessionId === 'string' && data.origin.sessionId.length < 200
       ? {
@@ -53,7 +66,11 @@ http.createServer(async (req, res) => {
           ...(typeof data.origin.messageId === 'string' && data.origin.messageId.length < 200 ? { messageId: data.origin.messageId } : {}),
         }
       : undefined;
-    return void reply(200, await dispatch(data.directory, data.prompt, { run: runOpenCode, origin }));
+    return void reply(200, await dispatch(data.directory, data.prompt, {
+      run: runOpenCode,
+      origin,
+      departmentId: typeof data.departmentId === 'string' && data.departmentId ? data.departmentId : undefined,
+    }));
   } catch (error) {
     return void reply(400, { message: officeError(error) });
   }

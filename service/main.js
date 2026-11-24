@@ -1,7 +1,7 @@
 // service/main.ts
 import http from "node:http";
 import { isAbsolute as isAbsolute2 } from "node:path";
-import { realpath as realpath3 } from "node:fs/promises";
+import { realpath as realpath4 } from "node:fs/promises";
 
 // shared/settings.mjs
 import { mkdir, open as open2, readFile, rename, realpath, unlink, writeFile } from "node:fs/promises";
@@ -62,6 +62,136 @@ function officeError(error) {
   return typeof error?.message === "string" ? error.message.slice(0, 240) : "Agent Office could not complete the request.";
 }
 
+// shared/departments.mjs
+var DEPARTMENT_MAX = 8;
+var MEMBER_MAX = 20;
+var LESSON_MAX = 200;
+var LESSONS_PER_TASK = 6;
+var LESSONS_PER_REVIEW = 3;
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function words(value, max) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+function departmentId(value) {
+  return String(value ?? "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+}
+function primaryAgents(agents) {
+  const list = Array.isArray(agents) ? agents : isRecord(agents) ? Object.values(agents) : [];
+  return list.filter((agent) => agent && typeof agent.id === "string" && agent.hidden !== true && agent.subagentOnly !== true && agent.subagent !== true && (agent.mode === undefined || agent.mode === "primary" || agent.mode === "all"));
+}
+function normalizeDepartments(value) {
+  if (value === null || value === undefined)
+    return null;
+  if (!Array.isArray(value))
+    throw new Error("Departments must be a list.");
+  if (value.length > DEPARTMENT_MAX)
+    throw new Error(`At most ${DEPARTMENT_MAX} departments.`);
+  const seen = new Set;
+  return value.map((entry, index) => {
+    if (!isRecord(entry))
+      throw new Error(`Department ${index + 1} must be an object.`);
+    const name = words(entry.name, 40);
+    if (!name)
+      throw new Error(`Department ${index + 1} needs a name.`);
+    const id = departmentId(entry.id || name);
+    if (!id)
+      throw new Error(`Department ${index + 1} needs an id.`);
+    if (seen.has(id))
+      throw new Error(`Department id "${id}" appears twice.`);
+    seen.add(id);
+    const lead = words(entry.lead, 64);
+    if (!lead)
+      throw new Error(`Department "${name}" needs a lead agent.`);
+    const members = Array.isArray(entry.members) ? [...new Set(entry.members.filter((m) => typeof m === "string" && m.trim()).map((m) => m.trim()))] : [];
+    if (members.length > MEMBER_MAX)
+      throw new Error(`Department "${name}" has too many members.`);
+    return { id, name, purpose: words(entry.purpose, 160), lead, members };
+  });
+}
+function departmentsFor(settings, agents) {
+  const saved = normalizeDepartments(settings?.departments);
+  if (saved && saved.length)
+    return saved;
+  const lead = typeof settings?.lead === "string" ? settings.lead.trim() : "";
+  if (!lead)
+    return [];
+  const candidates = primaryAgents(agents).map((agent) => agent.id);
+  return [{
+    id: "office",
+    name: "Office",
+    purpose: "The default team for this project.",
+    lead,
+    members: candidates.filter((id) => id !== lead)
+  }];
+}
+function lessonTexts(lessons, limit = LESSONS_PER_TASK) {
+  const list = Array.isArray(lessons) ? lessons : [];
+  return list.map((lesson) => typeof lesson === "string" ? lesson : lesson?.text).filter((text) => typeof text === "string" && text.trim()).map((text) => text.trim().slice(0, LESSON_MAX)).slice(0, limit);
+}
+function departmentContext(department, lessons) {
+  if (!department)
+    return "";
+  const lines = [`Office department: ${department.name}${department.purpose ? ` — ${department.purpose}` : ""}`];
+  lines.push(`Lead: ${department.lead}${department.members?.length ? ` · Members: ${department.members.join(", ")}` : ""}`);
+  const learned = lessonTexts(lessons, LESSONS_PER_TASK);
+  if (learned.length) {
+    lines.push("What this team learned (carry it into this task):", ...learned.map((text) => `- ${text}`));
+  }
+  return lines.join(`
+`);
+}
+function withDepartmentContext(prompt, department, lessons) {
+  const text = typeof prompt === "string" ? prompt.trim() : "";
+  const block = departmentContext(department, lessons);
+  return block ? `${text}
+
+—
+${block}` : text;
+}
+function parseLessons(text, max = LESSONS_PER_REVIEW) {
+  const out = [];
+  const seen = new Set;
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    const match = /^\s*lesson\s*:\s*(.+)$/i.exec(line);
+    if (!match)
+      continue;
+    const lesson = match[1].replace(/\s+/g, " ").trim().slice(0, LESSON_MAX);
+    if (lesson.length < 10)
+      continue;
+    const key = lesson.toLowerCase();
+    if (seen.has(key))
+      continue;
+    seen.add(key);
+    out.push(lesson);
+    if (out.length >= max)
+      break;
+  }
+  return out;
+}
+function reviewPrompt(department, lessons, finished) {
+  const work = (Array.isArray(finished) ? finished : []).map((item) => `- ${item.title || item.id} — ${item.label || "outcome unknown"} — ${item.id}`).join(`
+`);
+  const learned = lessonTexts(lessons, 12);
+  return [
+    `You are the Office advisor reviewing the ${department.name} department.`,
+    department.purpose ? `Purpose: ${department.purpose}` : "",
+    `Lead: ${department.lead}${department.members?.length ? ` · Members: ${department.members.join(", ")}` : ""}`,
+    "",
+    "Finished Office work (host-reported outcomes; completion is not verification):",
+    work,
+    "",
+    learned.length ? "Lessons this team already carries:" : "",
+    ...learned.map((text) => `- ${text}`),
+    "",
+    `Write at most ${LESSONS_PER_REVIEW} lessons this team should carry into its next task.`,
+    'Rules: one per line, exactly "LESSON: " followed by at most 200 characters; only from the evidence above; no generic advice; do not repeat an existing lesson.',
+    'Then one final line: "VERDICT: " and a short judgement of what the team should do differently.'
+  ].filter((line) => line !== "").join(`
+`);
+}
+
 // shared/settings.mjs
 var SETTINGS_KEYS = Object.freeze([
   "lead",
@@ -73,7 +203,9 @@ var SETTINGS_KEYS = Object.freeze([
   "notifications",
   "visibleControls",
   "parallelism",
-  "budget"
+  "budget",
+  "advisor",
+  "departments"
 ]);
 var DEFAULT_SETTINGS = Object.freeze(Object.fromEntries(SETTINGS_KEYS.map((key) => [key, null])));
 var STATE_CANDIDATES = [
@@ -95,10 +227,10 @@ async function readState() {
     try {
       const raw = await readFile(file, "utf8");
       const parsed = JSON.parse(raw);
-      if (!isRecord(parsed))
+      if (!isRecord2(parsed))
         throw new Error("Invalid Office settings.");
       for (const key of ["global", "projects"]) {
-        if (own(parsed, key) && !isRecord(parsed[key]))
+        if (own(parsed, key) && !isRecord2(parsed[key]))
           throw new Error("Invalid settings layer.");
       }
       return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
@@ -109,7 +241,7 @@ async function readState() {
   }
   return emptyState();
 }
-function isRecord(value) {
+function isRecord2(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function own(value, key) {
@@ -146,12 +278,16 @@ function validateValues(values) {
       case "specialistModel":
       case "language":
       case "appearance":
+      case "advisor":
         if (typeof value !== "string")
           throw new Error(`${key} must be a string or null.`);
         out[key] = value;
         break;
+      case "departments":
+        out[key] = normalizeDepartments(value);
+        break;
       case "agentModels":
-        if (!isRecord(value) || Object.values(value).some((entry) => entry !== null && (typeof entry !== "string" || !entry.trim()))) {
+        if (!isRecord2(value) || Object.values(value).some((entry) => entry !== null && (typeof entry !== "string" || !entry.trim()))) {
           throw new Error("Agent model overrides must map agent IDs to provider/model values or null.");
         }
         out[key] = value;
@@ -194,8 +330,8 @@ function effectiveSettings(project, global) {
       result[key] = project[key];
     }
   }
-  if (isRecord(project.agentModels)) {
-    result.agentModels = { ...isRecord(global.agentModels) ? global.agentModels : {}, ...project.agentModels };
+  if (isRecord2(project.agentModels)) {
+    result.agentModels = { ...isRecord2(global.agentModels) ? global.agentModels : {}, ...project.agentModels };
   }
   return result;
 }
@@ -238,7 +374,7 @@ function modelRef(value) {
   return { id, providerID: value.providerID, ...variant ? { variant } : {} };
 }
 function sanitizeAgent(agent) {
-  if (!isRecord(agent) || typeof (agent.id ?? agent.name) !== "string")
+  if (!isRecord2(agent) || typeof (agent.id ?? agent.name) !== "string")
     return null;
   return {
     id: agent.id ?? agent.name,
@@ -326,7 +462,7 @@ async function saveSettings(directory, scope, values, unset = []) {
   return withSettingsLock(file, async () => {
     const state = await readState();
     const current = scope === "global" ? state.global : state.projects[canonical] ?? state.projects[directory];
-    const layer = { ...isRecord(current) ? current : {}, ...validated };
+    const layer = { ...isRecord2(current) ? current : {}, ...validated };
     for (const key of unset)
       delete layer[key];
     if (scope === "global")
@@ -492,10 +628,10 @@ async function family(api, directory, rootId, limit = 200) {
 }
 
 // shared/dispatch.mjs
-import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2, rename as rename2, rm, open as openFile, realpath as realpath2 } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
+import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile3, rename as rename3, rm, open as openFile, realpath as realpath3 } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
 import { join as join2, isAbsolute } from "node:path";
-import { createHash, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash, randomUUID as randomUUID3 } from "node:crypto";
 
 // shared/setup.mjs
 var LEAD_NEXT_ACTION = Object.freeze({
@@ -600,6 +736,218 @@ var SETUP_PROMPT = [
 ].join(`
 `);
 
+// shared/lessons.mjs
+import { mkdir as mkdir2, open as open3, readFile as readFile2, realpath as realpath2, rename as rename2, unlink as unlink2, writeFile as writeFile2 } from "node:fs/promises";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { homedir as homedir3 } from "node:os";
+import path2 from "node:path";
+var MAX_LESSONS = 20;
+var MAX_REVIEWS = 12;
+function isRecord3(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function journalFile() {
+  return process.env.AGENT_OFFICE_LESSONS_FILE || path2.join(homedir3(), ".config", "agent-office", "lessons.json");
+}
+function emptyStore() {
+  return { version: 1, projects: {} };
+}
+async function readStore() {
+  try {
+    const parsed = JSON.parse(await readFile2(journalFile(), "utf8"));
+    if (!isRecord3(parsed) || !isRecord3(parsed.projects ?? {}))
+      throw new Error("invalid");
+    return { version: 1, ...parsed, projects: isRecord3(parsed.projects) ? parsed.projects : {} };
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return emptyStore();
+    throw new Error("The Office journal is unreadable. No changes were made.");
+  }
+}
+async function withLock(file, fn) {
+  const lock = `${file}.lock`;
+  let handle;
+  for (let attempt = 0;!handle; attempt++) {
+    try {
+      handle = await open3(lock, "wx", 384);
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        throw error;
+      if (attempt >= 40)
+        throw new Error("The Office journal is busy. Try again.");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await handle.close();
+    await unlink2(lock).catch(() => {
+      return;
+    });
+  }
+}
+async function mutate(fn) {
+  const file = journalFile();
+  await mkdir2(path2.dirname(file), { recursive: true, mode: 448 });
+  return withLock(file, async () => {
+    const store = await readStore();
+    const result = await fn(store);
+    const temp = `${file}.${process.pid}.${randomUUID2()}.tmp`;
+    try {
+      await writeFile2(temp, JSON.stringify(store, null, 2) + `
+`, { encoding: "utf8", mode: 384, flag: "wx" });
+      await rename2(temp, file);
+    } finally {
+      await unlink2(temp).catch((error) => {
+        if (error.code !== "ENOENT")
+          throw error;
+      });
+    }
+    return result;
+  });
+}
+function projectEntry(store, key, create) {
+  if (!isRecord3(store.projects[key])) {
+    if (!create)
+      return null;
+    store.projects[key] = { departments: {} };
+  }
+  const project = store.projects[key];
+  if (!isRecord3(project.departments)) {
+    if (!create)
+      return null;
+    project.departments = {};
+  }
+  return project;
+}
+function departmentEntry(project, id, create) {
+  if (!isRecord3(project.departments[id])) {
+    if (!create)
+      return null;
+    project.departments[id] = { lessons: [], reviews: [] };
+  }
+  const department = project.departments[id];
+  if (!Array.isArray(department.lessons))
+    department.lessons = [];
+  if (!Array.isArray(department.reviews))
+    department.reviews = [];
+  return department;
+}
+async function projectKey(directory) {
+  if (typeof directory !== "string" || !directory)
+    throw new Error("A project directory is required.");
+  return realpath2(directory);
+}
+function cleanDepartmentId(id) {
+  if (typeof id !== "string" || !id.trim())
+    throw new Error("A department is required.");
+  return id.trim();
+}
+function cleanLesson(text) {
+  const lesson = String(text ?? "").replace(/\s+/g, " ").trim().slice(0, LESSON_MAX);
+  if (lesson.length < 10)
+    throw new Error("A lesson needs at least 10 characters.");
+  return lesson;
+}
+async function readDepartmentJournal(directory, id) {
+  const key = await projectKey(directory);
+  const department = cleanDepartmentId(id);
+  const store = await readStore();
+  const project = projectEntry(store, key, false);
+  const entry = project ? departmentEntry(project, department, false) : null;
+  return {
+    lessons: (entry?.lessons ?? []).filter(isRecord3),
+    reviews: (entry?.reviews ?? []).filter(isRecord3)
+  };
+}
+async function readProjectJournal(directory) {
+  const key = await projectKey(directory);
+  const store = await readStore();
+  const project = projectEntry(store, key, false);
+  const result = {};
+  for (const [id, value] of Object.entries(project?.departments ?? {})) {
+    if (!isRecord3(value))
+      continue;
+    result[id] = {
+      lessons: (Array.isArray(value.lessons) ? value.lessons : []).filter(isRecord3),
+      reviews: (Array.isArray(value.reviews) ? value.reviews : []).filter(isRecord3)
+    };
+  }
+  return result;
+}
+async function addLessons(directory, id, texts, source) {
+  const key = await projectKey(directory);
+  const department = cleanDepartmentId(id);
+  const lessons = (Array.isArray(texts) ? texts : []).map(cleanLesson);
+  if (!lessons.length)
+    return { added: [], skipped: 0 };
+  const from = typeof source === "string" && source ? source : null;
+  return mutate((store) => {
+    const project = projectEntry(store, key, true);
+    const entry = departmentEntry(project, department, true);
+    const seen = new Set(entry.lessons.map((lesson) => String(lesson.text ?? "").toLowerCase()));
+    const added = [];
+    for (const text of lessons) {
+      const dedupe = text.toLowerCase();
+      if (seen.has(dedupe))
+        continue;
+      seen.add(dedupe);
+      entry.lessons.push({ id: randomUUID2(), text, source: from, addedAt: Date.now() });
+      added.push(text);
+    }
+    entry.lessons = entry.lessons.slice(-MAX_LESSONS);
+    return { added, skipped: lessons.length - added.length };
+  });
+}
+async function recordReview(directory, id, sessionId) {
+  const key = await projectKey(directory);
+  const department = cleanDepartmentId(id);
+  if (typeof sessionId !== "string" || !sessionId)
+    throw new Error("A session is required.");
+  return mutate((store) => {
+    const project = projectEntry(store, key, true);
+    const entry = departmentEntry(project, department, true);
+    if (!entry.reviews.some((review) => review.sessionId === sessionId)) {
+      entry.reviews.push({ sessionId, status: "pending", startedAt: Date.now() });
+      entry.reviews = entry.reviews.slice(-MAX_REVIEWS);
+    }
+  });
+}
+async function findReview(directory, sessionId) {
+  const key = await projectKey(directory);
+  if (typeof sessionId !== "string" || !sessionId)
+    throw new Error("A session is required.");
+  const store = await readStore();
+  const project = projectEntry(store, key, false);
+  for (const [department, entry] of Object.entries(project?.departments ?? {})) {
+    if (!isRecord3(entry) || !Array.isArray(entry.reviews))
+      continue;
+    const review = entry.reviews.find((item) => isRecord3(item) && item.sessionId === sessionId);
+    if (review)
+      return { department, review };
+  }
+  return null;
+}
+async function updateReview(directory, sessionId, patch) {
+  const key = await projectKey(directory);
+  if (typeof sessionId !== "string" || !sessionId)
+    throw new Error("A session is required.");
+  return mutate((store) => {
+    const project = projectEntry(store, key, false);
+    for (const entry of Object.values(project?.departments ?? {})) {
+      if (!isRecord3(entry) || !Array.isArray(entry.reviews))
+        continue;
+      const review = entry.reviews.find((item) => isRecord3(item) && item.sessionId === sessionId);
+      if (!review)
+        continue;
+      Object.assign(review, isRecord3(patch) ? patch : {}, { updatedAt: Date.now() });
+      return true;
+    }
+    throw new Error("That advisor review is not in the journal.");
+  });
+}
+
 // shared/dispatch.mjs
 var MAX_PROMPT = 32000;
 var INPUT_TOKENS = 4000;
@@ -609,7 +957,7 @@ function api(run, args) {
 }
 async function readJson(path) {
   try {
-    return JSON.parse(await readFile2(path, "utf8"));
+    return JSON.parse(await readFile3(path, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT")
       return null;
@@ -617,12 +965,12 @@ async function readJson(path) {
   }
 }
 async function writeJsonAtomic(path, value) {
-  const temp = `${path}.${process.pid}.${randomUUID2()}.tmp`;
-  await writeFile2(temp, JSON.stringify(value, null, 2) + `
+  const temp = `${path}.${process.pid}.${randomUUID3()}.tmp`;
+  await writeFile3(temp, JSON.stringify(value, null, 2) + `
 `, { mode: 384, flag: "wx" });
-  await rename2(temp, path);
+  await rename3(temp, path);
 }
-async function withLock(lockPath, fn) {
+async function withLock2(lockPath, fn) {
   const started = Date.now();
   while (true) {
     try {
@@ -644,7 +992,7 @@ async function withLock(lockPath, fn) {
   }
 }
 function stateDir() {
-  const base = process.env.XDG_STATE_HOME || join2(homedir3(), ".local", "state");
+  const base = process.env.XDG_STATE_HOME || join2(homedir4(), ".local", "state");
   return join2(base, "agent-office", "ledgers");
 }
 function ledgerPaths(directory) {
@@ -653,7 +1001,7 @@ function ledgerPaths(directory) {
   return { path, lock: `${path}.lock` };
 }
 async function admissionView(directory) {
-  const ledger = await readJson(ledgerPaths(await realpath2(directory)).path);
+  const ledger = await readJson(ledgerPaths(await realpath3(directory)).path);
   if (ledger && !Array.isArray(ledger.roots))
     throw new Error("Invalid Office ledger.");
   return [...ledger?.recent ?? [], ...ledger?.roots ?? []].map((r) => ({
@@ -772,16 +1120,28 @@ async function dispatch(directory, prompt, options = {}) {
   if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > MAX_PROMPT) {
     throw new Error(`Choose a message of 1-${MAX_PROMPT} characters.`);
   }
-  const dir = await realpath2(directory);
+  const dir = await realpath3(directory);
   const info = await inspectFn(dir, { run });
-  const selection = selectLead(info.agents || [], info.settings?.lead ?? null);
-  if (selection.nextAction !== "ready") {
-    throw new Error("Select a lead agent before dispatching.");
+  const departments = departmentsFor(info.settings, info.agents);
+  let department = null;
+  if (options.department) {
+    department = options.department;
+  } else if (typeof options.departmentId === "string" && options.departmentId) {
+    department = departments.find((item) => item.id === options.departmentId) ?? null;
+    if (!department)
+      throw new Error("That department is not configured. Refresh the Office.");
   }
+  const requested = typeof options.agent === "string" && options.agent ? options.agent : department?.lead ?? info.settings?.lead ?? null;
+  const selection = selectLead(info.agents || [], requested);
+  if (selection.nextAction !== "ready") {
+    throw new Error(department && requested === department.lead ? `Department lead "${department.lead}" is unavailable. Review the department in Settings.` : "Select a lead agent before dispatching.");
+  }
+  const lessons = department && options.context !== false ? Array.isArray(options.lessons) ? options.lessons : (await readDepartmentJournal(dir, department.id)).lessons : [];
   const lead = (info.agents || []).find((agent) => (agent.id ?? agent.name) === selection.selected) || {};
   const catalog = await catalogFor(run, dir);
-  const configured = parseModel(info.settings?.leadModel);
-  if (info.settings?.leadModel != null && !configured)
+  const explicitAgent = typeof options.agent === "string" && options.agent.length > 0;
+  const configured = explicitAgent ? null : parseModel(info.settings?.leadModel);
+  if (!explicitAgent && info.settings?.leadModel != null && !configured)
     throw new Error("Invalid leadModel.");
   const agentRef = agentModelRef(lead);
   const fallback = configured || agentRef || await hostDefault(run, dir);
@@ -813,8 +1173,8 @@ async function dispatch(directory, prompt, options = {}) {
     throw new Error("Budget exceeded.");
   if (finiteBudget)
     throw new Error("Finite Office budget: host cannot bound delegated costs. No task sent.");
-  await mkdir2(join2(ledgerPath, ".."), { recursive: true, mode: 448 });
-  const reservationId = randomUUID2();
+  await mkdir3(join2(ledgerPath, ".."), { recursive: true, mode: 448 });
+  const reservationId = randomUUID3();
   const requestId = `ses_${reservationId.replaceAll("-", "")}`;
   const origin = options.origin;
   if (origin) {
@@ -823,7 +1183,7 @@ async function dispatch(directory, prompt, options = {}) {
       throw new Error("Source message belongs to another project or is unavailable.");
   }
   const sourceKey = origin?.sessionId && origin?.messageId ? JSON.stringify([origin.sessionId, origin.messageId]) : null;
-  await withLock(lockPath, async () => {
+  await withLock2(lockPath, async () => {
     const ledger = await readJson(ledgerPath) ?? { roots: [] };
     if (sourceKey) {
       const duplicate = duplicateError(ledger, sourceKey);
@@ -844,6 +1204,7 @@ async function dispatch(directory, prompt, options = {}) {
       sessionId: null,
       issuedAt: Date.now(),
       lead: selection.selected,
+      department: department?.id ?? null,
       model: `${leadRef.providerID}/${leadRef.id}`,
       variant: fallback.variant,
       phase: "sending",
@@ -863,7 +1224,7 @@ async function dispatch(directory, prompt, options = {}) {
         model: fallback,
         ...origin?.sessionId ? { metadata: { agentOfficeOrigin: origin } } : {},
         location: { directory: dir },
-        title: `Office: ${prompt.trim().slice(0, 60)}`
+        title: department ? `Office · ${department.name}: ${prompt.trim().slice(0, 40)}` : `Office: ${prompt.trim().slice(0, 60)}`
       })
     ]);
     const created = JSON.parse(stdout)?.data;
@@ -874,7 +1235,7 @@ async function dispatch(directory, prompt, options = {}) {
       throw new Error("Host did not confirm the requested lead route.");
   } catch (error) {
     if ([400, 401, 403, 422].includes(error.status) || error.code === "ENOENT") {
-      await withLock(lockPath, async () => {
+      await withLock2(lockPath, async () => {
         const ledger = await readJson(ledgerPath);
         ledger.roots = ledger.roots.filter((r) => r.id !== reservationId);
         if (sourceKey)
@@ -886,7 +1247,7 @@ async function dispatch(directory, prompt, options = {}) {
     await markPhase("uncertain");
     throw new Error(`Session creation is uncertain. Reservation retained; check ${requestId} before retrying.`);
   }
-  await withLock(lockPath, async () => {
+  await withLock2(lockPath, async () => {
     const ledger = await readJson(ledgerPath);
     const root = ledger?.roots?.find((item) => item.id === reservationId);
     if (!root)
@@ -895,13 +1256,15 @@ async function dispatch(directory, prompt, options = {}) {
     await writeJsonAtomic(ledgerPath, ledger);
   });
   let text = prompt.trim();
+  if (department && options.context !== false)
+    text = withDepartmentContext(text, department, lessons);
   if (specialistRef) {
     text += `
 
 Preferred specialist model: ${info.settings.specialistModel}. This preference is not enforced by the host.`;
   }
   async function markPhase(phase) {
-    await withLock(lockPath, async () => {
+    await withLock2(lockPath, async () => {
       const ledger = await readJson(ledgerPath);
       ledger.roots.find((r) => r.id === reservationId).phase = phase;
       await writeJsonAtomic(ledgerPath, ledger);
@@ -1244,6 +1607,101 @@ async function usage(directory, rootId, options = {}) {
   return result;
 }
 
+// shared/advisor.mjs
+var TERMINAL = new Set(["succeeded", "completed", "failed", "interrupted", "cancelled"]);
+function labelFor(session) {
+  if (session?.outcome === "failed")
+    return "host reported failure";
+  if (session?.outcome === "interrupted")
+    return "host reported interruption";
+  if (session?.outcome)
+    return `host reported ${session.outcome}`;
+  return "no host outcome";
+}
+function messageRows(response) {
+  if (Array.isArray(response))
+    return response;
+  if (Array.isArray(response?.data))
+    return response.data;
+  return [];
+}
+async function finishedWork(directory, options = {}) {
+  const api = hostApi(options.run);
+  const reservations = await admissionView(directory);
+  const finished = [];
+  const seen = new Set;
+  for (const row of reservations.slice(-10)) {
+    if (!row?.rootId || row.phase !== "finished" || seen.has(row.rootId))
+      continue;
+    seen.add(row.rootId);
+    try {
+      const session = await api("GET", `/api/session/${encodeURIComponent(row.rootId)}`, {
+        "location[directory]": directory
+      });
+      if (session?.id !== row.rootId)
+        continue;
+      finished.push({ id: row.rootId, title: session.title || row.rootId, label: labelFor(session) });
+    } catch {}
+  }
+  return finished;
+}
+async function startReview(directory, departmentId, options = {}) {
+  const info = await (options.inspectFn ?? inspect)(directory, { run: options.run });
+  const departments = departmentsFor(info.settings, info.agents);
+  const department = departments.find((item) => item.id === departmentId) ?? null;
+  if (!department)
+    throw new Error("Configure that department before asking the advisor.");
+  const advisor = typeof info.settings?.advisor === "string" ? info.settings.advisor.trim() : "";
+  if (!advisor)
+    throw new Error("Choose an advisor in Settings before asking for a review.");
+  if (!primaryAgents(info.agents).some((agent) => agent.id === advisor)) {
+    throw new Error(`Advisor "${advisor}" is unavailable. Choose another in Settings.`);
+  }
+  const finished = await finishedWork(directory, options);
+  if (!finished.length)
+    throw new Error("No finished Office work to review yet. Finish a task first.");
+  const journal = await readDepartmentJournal(directory, department.id);
+  const accepted = await dispatch(directory, reviewPrompt(department, journal.lessons, finished), {
+    run: options.run,
+    agent: advisor,
+    department,
+    context: false
+  });
+  await recordReview(directory, department.id, accepted.sessionId);
+  return { sessionId: accepted.sessionId, department: department.id, advisor, reviewed: finished.length };
+}
+async function collectReview(directory, sessionId, options = {}) {
+  const found = await findReview(directory, sessionId);
+  if (!found)
+    throw new Error("That session is not an advisor review for this project.");
+  if (found.review.status === "collected")
+    throw new Error("Those lessons are already collected.");
+  const api = hostApi(options.run);
+  const session = await api("GET", `/api/session/${encodeURIComponent(sessionId)}`, {
+    "location[directory]": directory
+  });
+  if (session?.id !== sessionId)
+    throw new Error("That advisor session is unavailable.");
+  if (!TERMINAL.has(session.outcome))
+    throw new Error("The advisor is still working. Collect when it finishes.");
+  const rows = messageRows(await api("GET", `/api/session/${encodeURIComponent(sessionId)}/message`, { type: "assistant", limit: 20, order: "desc", "location[directory]": directory }));
+  const text = rows.flatMap((row) => Array.isArray(row?.content) ? row.content : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(`
+`);
+  const lessons = parseLessons(text);
+  if (!lessons.length) {
+    const reason = "The advisor wrote no LESSON lines.";
+    await updateReview(directory, sessionId, { status: "empty", reason });
+    return { added: [], skipped: 0, reason };
+  }
+  const result = await addLessons(directory, found.department, lessons, sessionId);
+  await updateReview(directory, sessionId, {
+    status: "collected",
+    collectedAt: Date.now(),
+    added: result.added.length
+  });
+  return { added: result.added, skipped: result.skipped };
+}
+
 // service/main.ts
 var port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 var token = process.env.OPENCHAMBER_SERVICE_TOKEN;
@@ -1255,7 +1713,7 @@ http.createServer(async (req, res) => {
     return void reply(401, {});
   if (req.method === "GET" && req.url === "/health")
     return void reply(200, { ok: true });
-  if (req.method !== "POST" || !["/inspect", "/records", "/settings", "/dispatch", "/usage"].includes(req.url ?? ""))
+  if (req.method !== "POST" || !["/inspect", "/records", "/settings", "/dispatch", "/usage", "/journal", "/advisor/start", "/advisor/collect"].includes(req.url ?? ""))
     return void reply(404, {});
   try {
     const chunks = [];
@@ -1281,7 +1739,7 @@ http.createServer(async (req, res) => {
     if (req.url === "/usage") {
       if (typeof data.rootId !== "string" || !data.rootId || data.rootId.length > 200)
         throw new Error("Select a session to see its usage.");
-      const result = await usage(await realpath3(data.directory), data.rootId, { run: runOpenCode });
+      const result = await usage(await realpath4(data.directory), data.rootId, { run: runOpenCode });
       return void reply(200, {
         counts: result.counts,
         reported: result.reported,
@@ -1290,13 +1748,30 @@ http.createServer(async (req, res) => {
         status: result.status
       });
     }
+    if (req.url === "/journal") {
+      return void reply(200, { departments: await readProjectJournal(await realpath4(data.directory)) });
+    }
+    if (req.url === "/advisor/start") {
+      if (typeof data.departmentId !== "string" || !data.departmentId)
+        throw new Error("Select a department.");
+      return void reply(200, await startReview(await realpath4(data.directory), data.departmentId, { run: runOpenCode }));
+    }
+    if (req.url === "/advisor/collect") {
+      if (typeof data.sessionId !== "string" || !data.sessionId)
+        throw new Error("Select an advisor session.");
+      return void reply(200, await collectReview(await realpath4(data.directory), data.sessionId, { run: runOpenCode }));
+    }
     if (typeof data.prompt !== "string" || !data.prompt.trim() || data.prompt.length > 32000)
       throw new Error("Choose a message of 1–32,000 characters.");
     const origin = typeof data.origin?.sessionId === "string" && data.origin.sessionId.length < 200 ? {
       sessionId: data.origin.sessionId,
       ...typeof data.origin.messageId === "string" && data.origin.messageId.length < 200 ? { messageId: data.origin.messageId } : {}
     } : undefined;
-    return void reply(200, await dispatch(data.directory, data.prompt, { run: runOpenCode, origin }));
+    return void reply(200, await dispatch(data.directory, data.prompt, {
+      run: runOpenCode,
+      origin,
+      departmentId: typeof data.departmentId === "string" && data.departmentId ? data.departmentId : undefined
+    }));
   } catch (error) {
     return void reply(400, { message: officeError(error) });
   }

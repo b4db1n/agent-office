@@ -187,8 +187,8 @@ async function family(api, directory, rootId, limit = 200) {
 }
 
 // shared/dispatch.mjs
-import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2, rename as rename2, rm, open as openFile, realpath as realpath2 } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
+import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile3, rename as rename3, rm, open as openFile, realpath as realpath3 } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
 import { join as join2, isAbsolute } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -196,6 +196,96 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open as open2, readFile, rename, realpath, unlink, writeFile } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import path from "node:path";
+
+// shared/departments.mjs
+var DEPARTMENT_MAX = 8;
+var MEMBER_MAX = 20;
+var LESSON_MAX = 200;
+var LESSONS_PER_TASK = 6;
+function isRecord(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function words(value, max) {
+  return typeof value === "string" ? value.trim().slice(0, max) : "";
+}
+function departmentId(value) {
+  return String(value ?? "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
+}
+function primaryAgents(agents) {
+  const list = Array.isArray(agents) ? agents : isRecord(agents) ? Object.values(agents) : [];
+  return list.filter((agent) => agent && typeof agent.id === "string" && agent.hidden !== true && agent.subagentOnly !== true && agent.subagent !== true && (agent.mode === undefined || agent.mode === "primary" || agent.mode === "all"));
+}
+function normalizeDepartments(value) {
+  if (value === null || value === undefined)
+    return null;
+  if (!Array.isArray(value))
+    throw new Error("Departments must be a list.");
+  if (value.length > DEPARTMENT_MAX)
+    throw new Error(`At most ${DEPARTMENT_MAX} departments.`);
+  const seen = new Set;
+  return value.map((entry, index) => {
+    if (!isRecord(entry))
+      throw new Error(`Department ${index + 1} must be an object.`);
+    const name = words(entry.name, 40);
+    if (!name)
+      throw new Error(`Department ${index + 1} needs a name.`);
+    const id = departmentId(entry.id || name);
+    if (!id)
+      throw new Error(`Department ${index + 1} needs an id.`);
+    if (seen.has(id))
+      throw new Error(`Department id "${id}" appears twice.`);
+    seen.add(id);
+    const lead = words(entry.lead, 64);
+    if (!lead)
+      throw new Error(`Department "${name}" needs a lead agent.`);
+    const members = Array.isArray(entry.members) ? [...new Set(entry.members.filter((m) => typeof m === "string" && m.trim()).map((m) => m.trim()))] : [];
+    if (members.length > MEMBER_MAX)
+      throw new Error(`Department "${name}" has too many members.`);
+    return { id, name, purpose: words(entry.purpose, 160), lead, members };
+  });
+}
+function departmentsFor(settings, agents) {
+  const saved = normalizeDepartments(settings?.departments);
+  if (saved && saved.length)
+    return saved;
+  const lead = typeof settings?.lead === "string" ? settings.lead.trim() : "";
+  if (!lead)
+    return [];
+  const candidates = primaryAgents(agents).map((agent) => agent.id);
+  return [{
+    id: "office",
+    name: "Office",
+    purpose: "The default team for this project.",
+    lead,
+    members: candidates.filter((id) => id !== lead)
+  }];
+}
+function lessonTexts(lessons, limit = LESSONS_PER_TASK) {
+  const list = Array.isArray(lessons) ? lessons : [];
+  return list.map((lesson) => typeof lesson === "string" ? lesson : lesson?.text).filter((text) => typeof text === "string" && text.trim()).map((text) => text.trim().slice(0, LESSON_MAX)).slice(0, limit);
+}
+function departmentContext(department, lessons) {
+  if (!department)
+    return "";
+  const lines = [`Office department: ${department.name}${department.purpose ? ` — ${department.purpose}` : ""}`];
+  lines.push(`Lead: ${department.lead}${department.members?.length ? ` · Members: ${department.members.join(", ")}` : ""}`);
+  const learned = lessonTexts(lessons, LESSONS_PER_TASK);
+  if (learned.length) {
+    lines.push("What this team learned (carry it into this task):", ...learned.map((text) => `- ${text}`));
+  }
+  return lines.join(`
+`);
+}
+function withDepartmentContext(prompt, department, lessons) {
+  const text = typeof prompt === "string" ? prompt.trim() : "";
+  const block = departmentContext(department, lessons);
+  return block ? `${text}
+
+—
+${block}` : text;
+}
+
+// shared/settings.mjs
 var SETTINGS_KEYS = Object.freeze([
   "lead",
   "leadModel",
@@ -206,7 +296,9 @@ var SETTINGS_KEYS = Object.freeze([
   "notifications",
   "visibleControls",
   "parallelism",
-  "budget"
+  "budget",
+  "advisor",
+  "departments"
 ]);
 var DEFAULT_SETTINGS = Object.freeze(Object.fromEntries(SETTINGS_KEYS.map((key) => [key, null])));
 var STATE_CANDIDATES = [
@@ -228,10 +320,10 @@ async function readState() {
     try {
       const raw = await readFile(file, "utf8");
       const parsed = JSON.parse(raw);
-      if (!isRecord(parsed))
+      if (!isRecord2(parsed))
         throw new Error("Invalid Office settings.");
       for (const key of ["global", "projects"]) {
-        if (own(parsed, key) && !isRecord(parsed[key]))
+        if (own(parsed, key) && !isRecord2(parsed[key]))
           throw new Error("Invalid settings layer.");
       }
       return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
@@ -242,7 +334,7 @@ async function readState() {
   }
   return emptyState();
 }
-function isRecord(value) {
+function isRecord2(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 function own(value, key) {
@@ -269,8 +361,8 @@ function effectiveSettings(project, global) {
       result[key] = project[key];
     }
   }
-  if (isRecord(project.agentModels)) {
-    result.agentModels = { ...isRecord(global.agentModels) ? global.agentModels : {}, ...project.agentModels };
+  if (isRecord2(project.agentModels)) {
+    result.agentModels = { ...isRecord2(global.agentModels) ? global.agentModels : {}, ...project.agentModels };
   }
   return result;
 }
@@ -313,7 +405,7 @@ function modelRef(value) {
   return { id, providerID: value.providerID, ...variant ? { variant } : {} };
 }
 function sanitizeAgent(agent) {
-  if (!isRecord(agent) || typeof (agent.id ?? agent.name) !== "string")
+  if (!isRecord2(agent) || typeof (agent.id ?? agent.name) !== "string")
     return null;
   return {
     id: agent.id ?? agent.name,
@@ -467,6 +559,80 @@ var SETUP_PROMPT = [
 ].join(`
 `);
 
+// shared/lessons.mjs
+import { mkdir as mkdir2, open as open3, readFile as readFile2, realpath as realpath2, rename as rename2, unlink as unlink2, writeFile as writeFile2 } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import path2 from "node:path";
+function isRecord3(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function journalFile() {
+  return process.env.AGENT_OFFICE_LESSONS_FILE || path2.join(homedir3(), ".config", "agent-office", "lessons.json");
+}
+function emptyStore() {
+  return { version: 1, projects: {} };
+}
+async function readStore() {
+  try {
+    const parsed = JSON.parse(await readFile2(journalFile(), "utf8"));
+    if (!isRecord3(parsed) || !isRecord3(parsed.projects ?? {}))
+      throw new Error("invalid");
+    return { version: 1, ...parsed, projects: isRecord3(parsed.projects) ? parsed.projects : {} };
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return emptyStore();
+    throw new Error("The Office journal is unreadable. No changes were made.");
+  }
+}
+function projectEntry(store, key, create) {
+  if (!isRecord3(store.projects[key])) {
+    if (!create)
+      return null;
+    store.projects[key] = { departments: {} };
+  }
+  const project = store.projects[key];
+  if (!isRecord3(project.departments)) {
+    if (!create)
+      return null;
+    project.departments = {};
+  }
+  return project;
+}
+function departmentEntry(project, id, create) {
+  if (!isRecord3(project.departments[id])) {
+    if (!create)
+      return null;
+    project.departments[id] = { lessons: [], reviews: [] };
+  }
+  const department = project.departments[id];
+  if (!Array.isArray(department.lessons))
+    department.lessons = [];
+  if (!Array.isArray(department.reviews))
+    department.reviews = [];
+  return department;
+}
+async function projectKey(directory) {
+  if (typeof directory !== "string" || !directory)
+    throw new Error("A project directory is required.");
+  return realpath2(directory);
+}
+function cleanDepartmentId(id) {
+  if (typeof id !== "string" || !id.trim())
+    throw new Error("A department is required.");
+  return id.trim();
+}
+async function readDepartmentJournal(directory, id) {
+  const key = await projectKey(directory);
+  const department = cleanDepartmentId(id);
+  const store = await readStore();
+  const project = projectEntry(store, key, false);
+  const entry = project ? departmentEntry(project, department, false) : null;
+  return {
+    lessons: (entry?.lessons ?? []).filter(isRecord3),
+    reviews: (entry?.reviews ?? []).filter(isRecord3)
+  };
+}
+
 // shared/dispatch.mjs
 var MAX_PROMPT = 32000;
 var INPUT_TOKENS = 4000;
@@ -476,7 +642,7 @@ function api(run, args) {
 }
 async function readJson(path) {
   try {
-    return JSON.parse(await readFile2(path, "utf8"));
+    return JSON.parse(await readFile3(path, "utf8"));
   } catch (error) {
     if (error.code === "ENOENT")
       return null;
@@ -485,9 +651,9 @@ async function readJson(path) {
 }
 async function writeJsonAtomic(path, value) {
   const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  await writeFile2(temp, JSON.stringify(value, null, 2) + `
+  await writeFile3(temp, JSON.stringify(value, null, 2) + `
 `, { mode: 384, flag: "wx" });
-  await rename2(temp, path);
+  await rename3(temp, path);
 }
 async function withLock(lockPath, fn) {
   const started = Date.now();
@@ -511,7 +677,7 @@ async function withLock(lockPath, fn) {
   }
 }
 function stateDir() {
-  const base = process.env.XDG_STATE_HOME || join2(homedir3(), ".local", "state");
+  const base = process.env.XDG_STATE_HOME || join2(homedir4(), ".local", "state");
   return join2(base, "agent-office", "ledgers");
 }
 function ledgerPaths(directory) {
@@ -629,16 +795,28 @@ async function dispatch(directory, prompt, options = {}) {
   if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > MAX_PROMPT) {
     throw new Error(`Choose a message of 1-${MAX_PROMPT} characters.`);
   }
-  const dir = await realpath2(directory);
+  const dir = await realpath3(directory);
   const info = await inspectFn(dir, { run });
-  const selection = selectLead(info.agents || [], info.settings?.lead ?? null);
-  if (selection.nextAction !== "ready") {
-    throw new Error("Select a lead agent before dispatching.");
+  const departments = departmentsFor(info.settings, info.agents);
+  let department = null;
+  if (options.department) {
+    department = options.department;
+  } else if (typeof options.departmentId === "string" && options.departmentId) {
+    department = departments.find((item) => item.id === options.departmentId) ?? null;
+    if (!department)
+      throw new Error("That department is not configured. Refresh the Office.");
   }
+  const requested = typeof options.agent === "string" && options.agent ? options.agent : department?.lead ?? info.settings?.lead ?? null;
+  const selection = selectLead(info.agents || [], requested);
+  if (selection.nextAction !== "ready") {
+    throw new Error(department && requested === department.lead ? `Department lead "${department.lead}" is unavailable. Review the department in Settings.` : "Select a lead agent before dispatching.");
+  }
+  const lessons = department && options.context !== false ? Array.isArray(options.lessons) ? options.lessons : (await readDepartmentJournal(dir, department.id)).lessons : [];
   const lead = (info.agents || []).find((agent) => (agent.id ?? agent.name) === selection.selected) || {};
   const catalog = await catalogFor(run, dir);
-  const configured = parseModel(info.settings?.leadModel);
-  if (info.settings?.leadModel != null && !configured)
+  const explicitAgent = typeof options.agent === "string" && options.agent.length > 0;
+  const configured = explicitAgent ? null : parseModel(info.settings?.leadModel);
+  if (!explicitAgent && info.settings?.leadModel != null && !configured)
     throw new Error("Invalid leadModel.");
   const agentRef = agentModelRef(lead);
   const fallback = configured || agentRef || await hostDefault(run, dir);
@@ -670,7 +848,7 @@ async function dispatch(directory, prompt, options = {}) {
     throw new Error("Budget exceeded.");
   if (finiteBudget)
     throw new Error("Finite Office budget: host cannot bound delegated costs. No task sent.");
-  await mkdir2(join2(ledgerPath, ".."), { recursive: true, mode: 448 });
+  await mkdir3(join2(ledgerPath, ".."), { recursive: true, mode: 448 });
   const reservationId = randomUUID();
   const requestId = `ses_${reservationId.replaceAll("-", "")}`;
   const origin = options.origin;
@@ -701,6 +879,7 @@ async function dispatch(directory, prompt, options = {}) {
       sessionId: null,
       issuedAt: Date.now(),
       lead: selection.selected,
+      department: department?.id ?? null,
       model: `${leadRef.providerID}/${leadRef.id}`,
       variant: fallback.variant,
       phase: "sending",
@@ -720,7 +899,7 @@ async function dispatch(directory, prompt, options = {}) {
         model: fallback,
         ...origin?.sessionId ? { metadata: { agentOfficeOrigin: origin } } : {},
         location: { directory: dir },
-        title: `Office: ${prompt.trim().slice(0, 60)}`
+        title: department ? `Office · ${department.name}: ${prompt.trim().slice(0, 40)}` : `Office: ${prompt.trim().slice(0, 60)}`
       })
     ]);
     const created = JSON.parse(stdout)?.data;
@@ -752,6 +931,8 @@ async function dispatch(directory, prompt, options = {}) {
     await writeJsonAtomic(ledgerPath, ledger);
   });
   let text = prompt.trim();
+  if (department && options.context !== false)
+    text = withDepartmentContext(text, department, lessons);
   if (specialistRef) {
     text += `
 

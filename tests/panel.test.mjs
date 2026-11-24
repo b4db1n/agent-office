@@ -127,6 +127,7 @@ function hostScript(opts = {}) {
     window.__holdDispatch = ${opts.holdDispatch === true};
     window.__heldDispatch = [];
     window.__failPaths = ${JSON.stringify(opts.failPaths ?? [])};
+    window.__serviceReplies = ${JSON.stringify(opts.serviceReplies ?? {})};
     window.__serviceRequests = [];
     window.__urls = [];
     window.__clipboard = [];
@@ -222,6 +223,10 @@ function hostScript(opts = {}) {
         window.__serviceRequests.push({ method: p.method, path: p.path, body });
         if (window.__failPaths.includes(p.path)) {
           reply(m, { status: 503, body: JSON.stringify({ ok: false, code: 'SERVICE_FAILED', message: 'Injected service failure.' }) });
+          return;
+        }
+        if (Object.prototype.hasOwnProperty.call(window.__serviceReplies, p.path)) {
+          reply(m, { status: 200, body: JSON.stringify(window.__serviceReplies[p.path]) });
           return;
         }
         if (p.path === '/dispatch') {
@@ -766,4 +771,96 @@ browserTest('status and panel keep only the views that apply', async () => {
     assert.equal(await panel.frame.getByText('Back to Work Status').count(), 0);
     assert.equal(await panel.frame.locator('.ao-tabs').count(), 1);
   } finally { await panel.browser.close(); }
+});
+
+const DEPARTMENT_INSPECT = {
+  ...READY_INSPECT,
+  settings: {
+    ...READY_INSPECT.settings,
+    advisor: 'helper',
+    departments: [{ id: 'engineering', name: 'Engineering', purpose: 'Ship the product', lead: 'lead', members: ['helper'] }],
+  },
+  sources: { ...READY_INSPECT.sources, advisor: 'project', departments: 'project' },
+};
+
+browserTest('departments show their team, lessons and advisor', async () => {
+  const { browser, frame } = await start({
+    sessions: [session('root-1', null, { title: 'Root task' })],
+    readySession: { id: 'root-1', title: 'Root One', busy: false },
+    inspect: DEPARTMENT_INSPECT,
+    serviceReplies: {
+      '/journal': { departments: { engineering: { lessons: [{ id: 'l1', text: 'Run the suite before shipping.' }], reviews: [] } } },
+    },
+  });
+  try {
+    const card = frame.locator('[data-department-card="engineering"]');
+    await card.waitFor({ timeout: 5000 });
+    const text = await card.innerText();
+    assert.match(text, /Engineering/);
+    assert.match(text, /Ship the product/);
+    assert.match(text, /Run the suite before shipping\./);
+    assert.match(text, /advisor helper/);
+    assert.equal(await card.locator('[data-action="advisorReview"]').count(), 1);
+  } finally { await browser.close(); }
+});
+
+browserTest('a department task dispatches with its department id', async () => {
+  const { browser, frame, page } = await start({
+    sessions: [session('root-1', null, { title: 'Root task' })],
+    readySession: { id: 'root-1', title: 'Root One', busy: false },
+    inspect: DEPARTMENT_INSPECT,
+    serviceReplies: { '/journal': { departments: {} } },
+  });
+  try {
+    await frame.locator('[data-action="askDepartment"][data-dept="engineering"]').click();
+    await frame.locator('#dept-task-engineering').fill('Fix the login.');
+    await frame.locator('[data-action="sendDepartment"][data-dept="engineering"]').click();
+    await page.waitForFunction(() => window.__serviceRequests.some((request) => request.path === '/dispatch'));
+    const sent = await page.evaluate(() => window.__serviceRequests.find((request) => request.path === '/dispatch'));
+    assert.equal(sent.body.departmentId, 'engineering');
+    assert.equal(sent.body.prompt, 'Fix the login.');
+    await page.waitForFunction(() => window.__opened.includes('dispatched-1'));
+  } finally { await browser.close(); }
+});
+
+browserTest('settings can add a department and save the structure', async () => {
+  const { browser, frame, page } = await start({
+    sessions: [session('root-1', null, { title: 'Root task' })],
+    readySession: { id: 'root-1', title: 'Root One', busy: false },
+    inspect: DEPARTMENT_INSPECT,
+    serviceReplies: { '/journal': { departments: {} } },
+  });
+  try {
+    await frame.locator('[data-view="settings"]').click();
+    await frame.locator('#office-advisor').waitFor({ timeout: 5000 });
+    assert.equal(await frame.locator('#office-advisor').inputValue(), 'helper');
+    await frame.locator('[data-action="addDepartment"]').click();
+    await frame.locator('#dept-department-2-name').fill('Research');
+    await frame.locator('#dept-department-2-purpose').fill('Find the truth');
+    await frame.locator('[data-action="saveSettings"]').click();
+    await page.waitForFunction(() => window.__serviceRequests.some((request) => request.path === '/settings'));
+    const body = await page.evaluate(() => window.__serviceRequests.find((request) => request.path === '/settings').body);
+    assert.deepEqual(body.values.departments.map((department) => department.name), ['Engineering', 'Research']);
+    assert.equal(body.values.advisor, 'helper');
+    assert.equal(body.values.departments[1].purpose, 'Find the truth');
+  } finally { await browser.close(); }
+});
+
+browserTest('an advisor review opens the session it starts', async () => {
+  const { browser, frame, page } = await start({
+    sessions: [session('root-1', null, { title: 'Root task' })],
+    readySession: { id: 'root-1', title: 'Root One', busy: false },
+    inspect: DEPARTMENT_INSPECT,
+    serviceReplies: {
+      '/journal': { departments: {} },
+      '/advisor/start': { sessionId: 'advisor-1', department: 'engineering', advisor: 'helper' },
+    },
+  });
+  try {
+    await frame.locator('[data-action="advisorReview"][data-dept="engineering"]').click();
+    await page.waitForFunction(() => window.__serviceRequests.some((request) => request.path === '/advisor/start'));
+    const sent = await page.evaluate(() => window.__serviceRequests.find((request) => request.path === '/advisor/start'));
+    assert.equal(sent.body.departmentId, 'engineering');
+    await page.waitForFunction(() => window.__opened.includes('advisor-1'));
+  } finally { await browser.close(); }
 });

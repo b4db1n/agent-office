@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { runOpenCode } from './host.mjs';
+import { normalizeDepartments } from './departments.mjs';
 
 export const SETTINGS_KEYS = Object.freeze([
   'lead',
@@ -19,6 +20,8 @@ export const SETTINGS_KEYS = Object.freeze([
   'visibleControls',
   'parallelism',
   'budget',
+  'advisor',
+  'departments',
 ]);
 
 const DEFAULT_SETTINGS = Object.freeze(
@@ -99,8 +102,12 @@ function validateValues(values) {
       case 'specialistModel':
       case 'language':
       case 'appearance':
+      case 'advisor':
         if (typeof value !== 'string') throw new Error(`${key} must be a string or null.`);
         out[key] = value;
+        break;
+      case 'departments':
+        out[key] = normalizeDepartments(value);
         break;
       case 'agentModels':
         if (!isRecord(value) || Object.values(value).some((entry) => entry !== null && (typeof entry !== 'string' || !entry.trim()))) {

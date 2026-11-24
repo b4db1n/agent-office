@@ -8,7 +8,25 @@ import { inspect, settingsView, saveSettings, SETTINGS_KEYS } from '../shared/se
 
 test('settings keys are exported', () => {
   assert.equal(Array.isArray(SETTINGS_KEYS), true);
-  assert.equal(SETTINGS_KEYS.length, 10);
+  assert.equal(SETTINGS_KEYS.length, 12);
+});
+
+test('saveSettings validates departments and the advisor', async () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), 'office-'));
+  process.env.AGENT_OFFICE_SETTINGS_FILE = path.join(stateDir, 'settings.json');
+  const dir = process.cwd();
+  await assert.rejects(() => saveSettings(dir, 'project', { departments: [{ name: 'Research' }] }), /lead agent/i);
+  await assert.rejects(() => saveSettings(dir, 'project', { advisor: 7 }), /advisor must be a string/i);
+  await saveSettings(dir, 'project', {
+    advisor: 'reviewer',
+    departments: [{ id: 'Research Lab', name: 'Research Lab', lead: 'lead', members: ['helper', 'helper'] }],
+  });
+  const view = await settingsView(dir);
+  assert.equal(view.settings.advisor, 'reviewer');
+  assert.deepEqual(view.settings.departments, [
+    { id: 'research-lab', name: 'Research Lab', purpose: '', lead: 'lead', members: ['helper'] },
+  ]);
+  delete process.env.AGENT_OFFICE_SETTINGS_FILE;
 });
 
 test('saveSettings validates scope', async () => {

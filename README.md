@@ -18,6 +18,18 @@ After installing, enable **Agent Office** in **Work Status → Panel Sections**.
 4. For a first task, try: “Delegate a small change to the selected specialist. Add a `double` function and a check that `double(4)` returns `8`. Run the check yourself and report its result.” Open a person in the Office to inspect the actual child session.
 5. **Ask Office lead** has two entry points: that **Ready** button and the action on the menu of **your own message** in a chat. Both explicitly dispatch a new lead root; neither is an `@` attachment. **Talk** only opens an existing session in OpenChamber; it never sends a message or answers a permission request. A specialist model is a preference, not a guarantee: Settings shows the requested lead model; a model on an assistant message is the host's **observed route**, not a billing receipt. **Completed** means the host reported completion — no reply, artifact or verified result is guaranteed; check with a local test. “Host default” does not mean free.
 
+## Departments and the advisor
+
+Departments organize agents that already exist in your project. A department has a name, a purpose, a lead and its members. The Office never creates, spawns or owns an agent; a department without an available lead is reported as needing attention, never silently swapped.
+
+Set an **advisor** in **Settings → Office structure**, then add the departments you want. From a department card you can:
+
+- **Ask** the department: the task goes to that department's lead, and the prompt carries the team and what it learned. The lead, model and department are recorded in the Office ledger.
+- **Advisor review**: the advisor reads the department's finished Office work — host-reported outcomes, labelled as such — and answers with up to three `LESSON:` lines.
+- **Collect lessons**: the Office stores only those explicit lines, with the advisor session as their source, and adds them to that department's next task.
+
+Lessons are advice, not verified facts. They live in Office state (`~/.config/agent-office/lessons.json`), are capped at 20 per department, and nothing edits an agent definition on its own. Completion is still a host outcome; a lesson never upgrades it to a verified result.
+
 ## Status and limits
 
 The compact section can also read **Checking**, **Degraded** (agent/model discovery or live session coverage is unavailable), or **Needs attention** (the selected lead or model is unavailable, a finite budget blocks dispatch, parallelism is zero, a delivery is pending or uncertain, or a session shows failed/waiting/unknown status). Refresh after fixing the cause; a degraded or uncertain reading is not permission to retry blindly. Cost is a host-reported figure or an estimate from assistant messages, not a billing receipt: partial and no-data readings stay labeled and unknown counts stay unknown; a request or selection is not an observed route. Verification is yours — **Completed** only reports host completion and needs a local check.

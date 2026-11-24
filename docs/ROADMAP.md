@@ -39,7 +39,9 @@ passes, and a deliberate break in `panel/main.ts` makes it fail.
 **DONE** — 1c439d4. `bun run test:panel` installs Chromium and runs the 20 checks; `bun test`
 runs them when the browser exists; a missing browser skips with that command in the message,
 and `PANEL_REQUIRE_BROWSER=1` turns the skip into a failure. A deliberate label change in
-`panel/main.ts` failed 3 of the 20 checks, then was reverted. Full suite: 146 pass.
+`panel/main.ts` failed 3 of the 20 checks, then was reverted. The CI job is proven green on
+ubuntu-24.04 (run 45310563121, 41 s) after 18c1890 pinned the runner: `ubuntu-latest` had
+moved to 26.04, which Playwright 1.60 does not support.
 
 ### 3. Controls that do nothing are shown as if they work
 `panel/main.ts` renders `language` and `notifications` inputs while the same file admits
@@ -78,19 +80,31 @@ runs that exact path.
 **Done when:** a test runs the documented command from a project directory and asserts the
 preview output; the README command is the one under test.
 
+### 8. A wrong lesson cannot be removed
+The journal is append-only from the panel. A lesson the advisor got wrong keeps riding along
+in every new task for that department.
+
+**Done when:** a lesson can be removed with a confirmation, the next task no longer carries
+it, and a test covers the removal.
+
+### 9. The compact Work Status section ignores departments
+It names the Office lead only, so a project with several teams reads as if one lead owns
+everything.
+
+**Done when:** the compact section names the default department or says the lead is the
+default team's lead, without adding a second source of truth.
+
 ## Waiting
 
-- **The CI browser job is written but not proven.** `.github/workflows/check.yml` installs
-  Chromium and sets `PANEL_REQUIRE_BROWSER=1` on the test step; the first push shows whether
-  it runs. Not done until that run is green.
+- (nothing)
 
 ## Owner decisions
 
 - **Name.** Five other GitHub projects are called Agent Office or close to it, all a
-  cartoon-office metaphor. The name buries this project in search. Renaming is a product
-  decision, not a code change.
+  cartoon-office metaphor. The name buries this project in search. The user accepted a rename
+  to **Office Steward**; it is queued after the current feature work.
 - **Publishing.** This repository is the only distribution channel. No package registry, no
-  hosted service, no telemetry.
+  hosted service, no telemetry. Green commits are pushed automatically.
 
 ## Not planned
 

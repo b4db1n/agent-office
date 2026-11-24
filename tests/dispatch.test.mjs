@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { dispatch } from '../shared/dispatch.mjs';
 import { saveSettings, settingsView } from '../shared/settings.mjs';
+import { addLessons } from '../shared/lessons.mjs';
 
 const LEAD = { id: 'lead', mode: 'primary' };
 const MODELS = [
@@ -16,6 +17,7 @@ async function makeFixture(extraModels = []) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), 'office-dispatch-')));
   const state = await mkdtemp(join(tmpdir(), 'office-dispatch-state-'));
   process.env.AGENT_OFFICE_SETTINGS_FILE = join(state, 'settings.json');
+  process.env.AGENT_OFFICE_LESSONS_FILE = join(state, 'lessons.json');
   process.env.XDG_STATE_HOME = state;
   return {
     dir,
@@ -67,6 +69,7 @@ function fakeRunner(fixture, calls, hook = null) {
 
 async function cleanup(fixture) {
   delete process.env.AGENT_OFFICE_SETTINGS_FILE;
+  delete process.env.AGENT_OFFICE_LESSONS_FILE;
   delete process.env.XDG_STATE_HOME;
   await rm(fixture.dir, { recursive: true, force: true });
   await rm(fixture.state, { recursive: true, force: true });
@@ -292,4 +295,42 @@ test('same-origin replay after a lost ACK reports uncertain, not submitted', asy
   assert.equal(calls.filter(c=>c.includes('/prompt')).length,1);
   assert.equal(attempted.length,1); // no second attempted send
   assert.equal(confirmed.length,0); // still no confirmed receipt
+});
+
+test('a department dispatch carries its team and journal lessons', async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => cleanup(fixture));
+  await configure(fixture, {
+    departments: [{ id: 'engineering', name: 'Engineering', purpose: 'Fix the product', lead: 'lead', members: [] }],
+  });
+  await addLessons(fixture.dir, 'engineering', ['Run the full suite before claiming a fix works.'], null);
+  const calls = [];
+  await dispatch(fixture.dir, 'Fix the login.', {
+    run: fakeRunner(fixture, calls),
+    inspectFn: () => fixture.inspectFn(),
+    departmentId: 'engineering',
+  });
+  const promptCall = calls.find((call) => call.includes('/prompt') && call.startsWith('api POST'));
+  const text = JSON.parse(promptCall.split(' --data ')[1]).text;
+  assert.match(text, /^Fix the login\./);
+  assert.match(text, /Office department: Engineering — Fix the product/);
+  assert.match(text, /Run the full suite before claiming a fix works\./);
+  const key = createHash('sha256').update(fixture.dir).digest('hex').slice(0, 24);
+  const ledger = JSON.parse(await readFile(join(fixture.state, 'agent-office', 'ledgers', `${key}.json`), 'utf8'));
+  assert.equal(ledger.roots[0].department, 'engineering');
+});
+
+test('an unknown department refuses instead of switching teams', async (t) => {
+  const fixture = await makeFixture();
+  t.after(() => cleanup(fixture));
+  await configure(fixture, {
+    departments: [{ id: 'engineering', name: 'Engineering', lead: 'lead', members: [] }],
+  });
+  const calls = [];
+  await assert.rejects(dispatch(fixture.dir, 'Do work.', {
+    run: fakeRunner(fixture, calls),
+    inspectFn: () => fixture.inspectFn(),
+    departmentId: 'missing',
+  }), /department is not configured/i);
+  assert.equal(calls.filter((call) => call.includes('POST /api/session ')).length, 0);
 });

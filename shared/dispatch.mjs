@@ -6,6 +6,8 @@ import { join, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { inspect } from '../shared/settings.mjs';
 import { selectLead } from '../shared/setup.mjs';
+import { departmentsFor, withDepartmentContext } from '../shared/departments.mjs';
+import { readDepartmentJournal } from '../shared/lessons.mjs';
 
 const MAX_PROMPT = 32000;
 const INPUT_TOKENS = 4000;
@@ -183,15 +185,39 @@ export async function dispatch(directory, prompt, options = {}) {
 
   const dir = await realpath(directory);
   const info = await inspectFn(dir,{run});
-  const selection = selectLead(info.agents || [], info.settings?.lead ?? null);
-  if (selection.nextAction !== 'ready') {
-    throw new Error('Select a lead agent before dispatching.');
+  const departments = departmentsFor(info.settings, info.agents);
+  let department = null;
+  if (options.department) {
+    department = options.department;
+  } else if (typeof options.departmentId === 'string' && options.departmentId) {
+    // An explicit department that is gone is an error, never a silent switch
+    // to a different team.
+    department = departments.find((item) => item.id === options.departmentId) ?? null;
+    if (!department) throw new Error('That department is not configured. Refresh the Office.');
   }
+  const requested = typeof options.agent === 'string' && options.agent
+    ? options.agent
+    : department?.lead ?? info.settings?.lead ?? null;
+  const selection = selectLead(info.agents || [], requested);
+  if (selection.nextAction !== 'ready') {
+    throw new Error(department && requested === department.lead
+      ? `Department lead "${department.lead}" is unavailable. Review the department in Settings.`
+      : 'Select a lead agent before dispatching.');
+  }
+  // Read the journal before creating anything: an unreadable journal must not
+  // leave a session with no prompt.
+  const lessons = department && options.context !== false
+    ? (Array.isArray(options.lessons) ? options.lessons : (await readDepartmentJournal(dir, department.id)).lessons)
+    : [];
   const lead = (info.agents || []).find((agent) => (agent.id ?? agent.name) === selection.selected) || {};
 
   const catalog = await catalogFor(run, dir);
-  const configured = parseModel(info.settings?.leadModel);
-  if (info.settings?.leadModel != null && !configured) throw new Error('Invalid leadModel.');
+  // An explicitly named agent (an advisor, a department lead invoked directly)
+  // runs on its own configured model. The Office-wide leadModel is for
+  // "Ask Office lead" and for a department's ordinary dispatch.
+  const explicitAgent = typeof options.agent === 'string' && options.agent.length > 0;
+  const configured = explicitAgent ? null : parseModel(info.settings?.leadModel);
+  if (!explicitAgent && info.settings?.leadModel != null && !configured) throw new Error('Invalid leadModel.');
   const agentRef = agentModelRef(lead);
   const fallback = configured || agentRef || await hostDefault(run, dir);
   const leadRef = findModel(catalog, fallback);
@@ -251,6 +277,7 @@ export async function dispatch(directory, prompt, options = {}) {
       sessionId: null,
       issuedAt: Date.now(),
       lead: selection.selected,
+      department: department?.id ?? null,
       model: `${leadRef.providerID}/${leadRef.id}`,
       variant: fallback.variant,
       phase:'sending',
@@ -271,7 +298,7 @@ export async function dispatch(directory, prompt, options = {}) {
         model: fallback,
         ...(origin?.sessionId ? {metadata:{agentOfficeOrigin:origin}} : {}),
         location: { directory: dir },
-        title: `Office: ${prompt.trim().slice(0, 60)}`,
+        title: department ? `Office · ${department.name}: ${prompt.trim().slice(0, 40)}` : `Office: ${prompt.trim().slice(0, 60)}`,
       }),
     ]);
     const created = JSON.parse(stdout)?.data;
@@ -303,6 +330,7 @@ export async function dispatch(directory, prompt, options = {}) {
   });
 
   let text = prompt.trim();
+  if (department && options.context !== false) text = withDepartmentContext(text, department, lessons);
   if (specialistRef) {
     text += `\n\nPreferred specialist model: ${info.settings.specialistModel}. This preference is not enforced by the host.`;
   }

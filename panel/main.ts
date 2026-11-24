@@ -11,6 +11,8 @@ import { applyHostReady } from '@openchamber/sdk/ui';
 import { SETUP_PROMPT, selectLead } from '../shared/setup.mjs';
 import { issueExample, issuePreview } from '../shared/contribution.mjs';
 import { observation, steward } from '../shared/steward.mjs';
+// @ts-ignore - shared/departments.mjs has no type declarations
+import { departmentsFor, normalizeDepartments, primaryAgents } from '../shared/departments.mjs';
 
 const host = connectHost();
 const rootEl = document.querySelector<HTMLElement>('#root');
@@ -41,6 +43,11 @@ type CostResult = {
   estimated?: number;
 };
 
+type Department = { id: string; name: string; purpose: string; lead: string; members: string[] };
+type Lesson = { id?: string; text: string; source?: string | null };
+type Review = { sessionId: string; status: string; reason?: string };
+type JournalEntry = { lessons: Lesson[]; reviews: Review[] };
+
 type State = {
   ready: HostReadyContext | null;
   surface: 'panel' | 'status';
@@ -62,6 +69,9 @@ type State = {
   cost: CostResult | null;
   costState: 'idle' | 'loading' | 'ready' | 'error';
   costError: string;
+  journal: Record<string, JournalEntry>;
+  journalState: 'idle' | 'loading' | 'ready' | 'error';
+  journalError: string;
 };
 
 const SETTINGS_KEYS = [
@@ -75,6 +85,8 @@ const SETTINGS_KEYS = [
   'visibleControls',
   'parallelism',
   'budget',
+  'advisor',
+  'departments',
 ] as const;
 
 const state: State = {
@@ -98,6 +110,9 @@ const state: State = {
   cost: null,
   costState: 'idle',
   costError: '',
+  journal: {},
+  journalState: 'idle',
+  journalError: '',
 };
 
 let subscriptionProject: string | null = null;
@@ -113,6 +128,12 @@ const settingEdits = new Map<string, string>();
 let composingTask = false;
 const taskDrafts = new Map<string,string>();
 const submitting = new Set<string>();
+let departmentEdits: Department[] | null = null;
+let structureEdited = false;
+let composingDepartment: string | null = null;
+const departmentDrafts = new Map<string, string>();
+const departmentSubmitting = new Set<string>();
+let journalGeneration = 0;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -262,7 +283,7 @@ function unsetForSave(): string[] {
 }
 
 async function saveSettings(): Promise<void> {
-  if (!settingEdits.size) return;
+  if (!settingEdits.size && !structureEdited) return;
   if (!state.directory) {
     toast('error', 'Open a project first.');
     return;
@@ -303,11 +324,25 @@ async function saveSettings(): Promise<void> {
   }
   const payload: Record<string, unknown> = { directory: state.directory, scope: state.settingsScope, values };
   const directory = state.directory, scope = state.settingsScope;
+  if (structureEdited) {
+    try {
+      values.departments = normalizeDepartments(structureDepartments()) ?? [];
+    } catch (error) {
+      toast('error', plainError(error));
+      return;
+    }
+    const advisor = (document.getElementById('office-advisor') as HTMLSelectElement | null)?.value ?? '';
+    if (advisor) values.advisor = advisor;
+    else unset.push('advisor');
+    payload.values = values;
+  }
   if (unset.length > 0) payload.unset = unset;
   try {
     await callService('/settings', payload);
     if (directory !== state.directory || scope !== state.settingsScope) return;
     settingEdits.clear();
+    structureEdited = false;
+    departmentEdits = null;
     toast('success', `Settings saved (${state.settingsScope}).`);
     await inspect();
   } catch (error) {
@@ -464,6 +499,7 @@ async function ensureProject(force = false): Promise<void> {
       state.projectId = projectId;
       render();
       void inspect();
+      void loadJournal();
       return;
     }
     const generation = ++subscriptionGeneration;
@@ -507,12 +543,56 @@ async function ensureProject(force = false): Promise<void> {
     }
     unsubscribeSessions = unsubscribe;
     void inspect();
+    void loadJournal();
   } catch {
     if (load !== projectLoadGeneration) return;
     state.snapshotState = 'loading';
     state.snapshotError = 'OpenChamber did not send the session list.';
     render();
   }
+}
+
+function currentDepartments(): Department[] {
+  return departmentsFor(state.inspect?.settings ?? {}, state.inspect?.agents ?? []) as Department[];
+}
+
+function advisorId(): string {
+  const value = state.inspect?.settings?.advisor;
+  return typeof value === 'string' ? value : '';
+}
+
+function journalFor(id: string): JournalEntry {
+  const entry = state.journal[id];
+  return {
+    lessons: Array.isArray(entry?.lessons) ? entry.lessons : [],
+    reviews: Array.isArray(entry?.reviews) ? entry.reviews : [],
+  };
+}
+
+function structureDepartments(): Department[] {
+  return (departmentEdits ?? currentDepartments()).map((department) => ({
+    ...department,
+    members: [...department.members],
+  }));
+}
+
+async function loadJournal(): Promise<void> {
+  const directory = state.directory;
+  if (!directory) return;
+  const generation = ++journalGeneration;
+  state.journalState = 'loading';
+  try {
+    const result = await callService<{ departments?: Record<string, JournalEntry> }>('/journal', { directory });
+    if (generation !== journalGeneration || directory !== state.directory) return;
+    state.journal = result.departments ?? {};
+    state.journalState = 'ready';
+    state.journalError = '';
+  } catch (error) {
+    if (generation !== journalGeneration || directory !== state.directory) return;
+    state.journalState = 'error';
+    state.journalError = plainError(error);
+  }
+  render();
 }
 
 function renderStatus(): string {
@@ -541,6 +621,45 @@ function renderStatus(): string {
 function setupControls(): string {
   return `<p>Inspect this project, preview missing definitions, then approve only what you want.</p>
     <button class="ao-btn" data-action="copySetup">Copy setup prompt</button>`;
+}
+
+function renderDepartments(): string {
+  const departments = currentDepartments();
+  if (!departments.length) return '';
+  const advisor = advisorId();
+  const cards = departments.map((department) => {
+    const journal = journalFor(department.id);
+    const pending = [...journal.reviews].reverse().find((review) => review.status === 'pending');
+    const learned = journal.lessons.slice(-3).reverse();
+    const composing = composingDepartment === department.id;
+    return `<div class="ao-card" data-department-card="${esc(department.id)}">
+      <div class="ao-row" style="justify-content:space-between;">
+        <div>
+          <h3 class="ao-title" style="font-size:13px;">${esc(department.name)}</h3>
+          <div class="ao-muted">${esc(department.purpose || 'No purpose set.')}</div>
+        </div>
+        <span class="ao-muted">${department.members.length} member${department.members.length === 1 ? '' : 's'}</span>
+      </div>
+      <div class="ao-muted">Lead: <b>${esc(department.lead)}</b>${department.members.length ? ` · ${department.members.map((m) => esc(m)).join(', ')}` : ''}</div>
+      <div class="ao-muted">${journal.lessons.length} lesson${journal.lessons.length === 1 ? '' : 's'}${advisor ? ` · advisor ${esc(advisor)}` : ' · no advisor yet'}</div>
+      ${learned.length ? `<div class="ao-muted">What this team learned:</div><ul>${learned.map((lesson) => `<li>${esc(lesson.text)}</li>`).join('')}</ul>` : ''}
+      ${pending ? '<div class="ao-muted">An advisor review is open — collect its lessons when the advisor finishes.</div>' : ''}
+      <div class="ao-row">
+        <button class="ao-btn" data-action="askDepartment" data-dept="${esc(department.id)}">Ask ${esc(department.name)}</button>
+        ${advisor ? `<button class="ao-btn" data-action="advisorReview" data-dept="${esc(department.id)}">Advisor review</button>` : ''}
+        ${pending ? `<button class="ao-btn primary" data-action="collectReview" data-dept="${esc(department.id)}" data-session="${esc(pending.sessionId)}">Collect lessons</button>` : ''}
+      </div>
+      ${composing ? `<div class="ao-field"><label for="dept-task-${esc(department.id)}">New task for ${esc(department.name)}</label>
+        <textarea id="dept-task-${esc(department.id)}" maxlength="32000" class="ao-input">${esc(departmentDrafts.get(department.id) ?? '')}</textarea></div>
+        <div class="ao-row"><button class="ao-btn primary" data-action="sendDepartment" data-dept="${esc(department.id)}" ${departmentSubmitting.has(department.id) ? 'disabled' : ''}>Send to ${esc(department.lead)}</button>
+        <button class="ao-btn" data-action="cancelDepartment">Cancel</button></div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="ao-card">
+    <div class="ao-row" style="justify-content:space-between;"><h3 class="ao-title" style="font-size:13px;">Departments</h3>
+      <span class="ao-muted">${state.journalState === 'error' ? esc(state.journalError) : state.journalState === 'loading' ? 'Reading lessons…' : ''}</span></div>
+    <div class="ao-grid" style="grid-template-columns:1fr;">${cards}</div>
+  </div>`;
 }
 
 function renderOffice(): string {
@@ -573,6 +692,7 @@ function renderOffice(): string {
         <h2 class="ao-title">Agent Office</h2>
         <p class="ao-sub">${esc(state.rootTitle || state.directory || 'No session')}</p>
       </div>
+      ${renderDepartments()}
       ${agentsHtml}
       ${viewingOutside ? `<p class="ao-muted">Viewing ${esc(state.rootTitle || state.rootId)} — this chat is not part of the Office team shown.</p>` : ''}
       <div class="ao-card">
@@ -622,7 +742,7 @@ function renderCostCard(): string {
 
 function renderSettings(): string {
   const insp = state.inspect;
-  const fields = SETTINGS_KEYS.map((key) => {
+  const fields = SETTINGS_KEYS.filter((key) => key !== 'departments' && key !== 'advisor').map((key) => {
     const layer = insp?.[state.settingsScope];
     const val = settingEdits.get(key) ?? (isRecord(layer) ? layer[key] : undefined);
     const valueStr =
@@ -682,6 +802,7 @@ function renderSettings(): string {
           ${fields}
         </div>
       </div>
+      ${renderStructure()}
       <div class="ao-card">
         <h3 class="ao-title" style="font-size:13px;">Agents</h3>
         <table class="ao-table">
@@ -722,10 +843,52 @@ function renderContribute(): string {
   `;
 }
 
+function renderStructure(): string {
+  const agents = primaryAgents(state.inspect?.agents ?? []) as { id: string }[];
+  if (!agents.length) return '';
+  const departments = structureDepartments();
+  const advisor = advisorId();
+  const rows = departments.map((department, index) => `
+    <fieldset class="ao-card" data-dept-card="${esc(department.id)}">
+      <div class="ao-row" style="justify-content:space-between;">
+        <b>Department ${index + 1}</b>
+        <button class="ao-btn" data-action="removeDepartment" data-dept="${esc(department.id)}">Remove</button>
+      </div>
+      <div class="ao-field"><label for="dept-${esc(department.id)}-name">Name</label>
+        <input id="dept-${esc(department.id)}-name" class="ao-input" data-dept-field="name" data-dept="${esc(department.id)}" value="${esc(department.name)}" maxlength="40" /></div>
+      <div class="ao-field"><label for="dept-${esc(department.id)}-purpose">Purpose</label>
+        <input id="dept-${esc(department.id)}-purpose" class="ao-input" data-dept-field="purpose" data-dept="${esc(department.id)}" value="${esc(department.purpose)}" maxlength="160" /></div>
+      <div class="ao-field"><label for="dept-${esc(department.id)}-lead">Lead</label>
+        <select id="dept-${esc(department.id)}-lead" class="ao-input" data-dept-field="lead" data-dept="${esc(department.id)}">
+          ${agents.map((agent) => `<option value="${esc(agent.id)}" ${agent.id === department.lead ? 'selected' : ''}>${esc(agent.id)}</option>`).join('')}
+        </select></div>
+      <div class="ao-field"><span>Members</span>
+        <div class="ao-row">${agents.filter((agent) => agent.id !== department.lead).map((agent) =>
+          `<label class="ao-muted"><input type="checkbox" data-dept-field="member" data-dept="${esc(department.id)}" value="${esc(agent.id)}" ${department.members.includes(agent.id) ? 'checked' : ''} /> ${esc(agent.id)}</label>`).join('') || '<span class="ao-muted">No other primary agents.</span>'}</div></div>
+    </fieldset>`).join('');
+  return `<div class="ao-card">
+    <h3 class="ao-title" style="font-size:13px;">Office structure</h3>
+    <div class="ao-field"><label for="office-advisor">Advisor</label>
+      <select id="office-advisor" class="ao-input" data-office-field="advisor">
+        <option value="">None</option>
+        ${agents.map((agent) => `<option value="${esc(agent.id)}" ${agent.id === advisor ? 'selected' : ''}>${esc(agent.id)}</option>`).join('')}
+      </select>
+      <small>The advisor reviews finished work and writes lessons for the team. It never edits an agent on its own.</small></div>
+    ${rows}
+    <div class="ao-row"><button class="ao-btn" data-action="addDepartment">Add department</button></div>
+    <p class="ao-muted">Departments organize agents that already exist. Office never creates or spawns one.</p>
+  </div>`;
+}
+
 function settingsPreview(): string {
   const layer = state.inspect?.[state.settingsScope];
-  return settingEdits.size ? 'Setup preview pending · ' + [...settingEdits].map(([key,value]) =>
-    `${key}: ${JSON.stringify(isRecord(layer) ? layer[key] ?? null : null)} → ${value || 'inherit'}`).join('; ') : '';
+  const parts: string[] = [];
+  if (settingEdits.size) {
+    parts.push([...settingEdits].map(([key, value]) =>
+      `${key}: ${JSON.stringify(isRecord(layer) ? layer[key] ?? null : null)} → ${value || 'inherit'}`).join('; '));
+  }
+  if (structureEdited) parts.push('Office structure: departments and advisor');
+  return parts.length ? 'Setup preview pending · ' + parts.join(' · ') : '';
 }
 
 function renderPanel(): string {
@@ -836,6 +999,8 @@ const handlers = {
   },
   setScope: (scope: string) => {
     settingEdits.clear();
+    structureEdited = false;
+    departmentEdits = null;
     state.settingsScope = scope === 'project' ? 'project' : 'global';
     render();
   },
@@ -847,6 +1012,92 @@ const handlers = {
   },
   cancelContribute: () => {
     cancelContribute();
+  },
+  askDepartment: (arg?: { dept?: string }) => {
+    if (!arg?.dept) return;
+    composingDepartment = arg.dept;
+    render();
+    document.getElementById(`dept-task-${arg.dept}`)?.focus();
+  },
+  cancelDepartment: () => {
+    composingDepartment = null;
+    render();
+  },
+  sendDepartment: async (arg?: { dept?: string }) => {
+    const id = arg?.dept;
+    const dir = state.directory;
+    const prompt = dir && id ? departmentDrafts.get(id)?.trim() : '';
+    if (!dir || !id || !prompt || departmentSubmitting.has(id)) return;
+    departmentSubmitting.add(id);
+    render();
+    try {
+      const accepted = await callService<{ sessionId?: string; directory?: string }>('/dispatch', { directory: dir, prompt, departmentId: id });
+      if (typeof accepted.sessionId !== 'string' || accepted.directory !== dir) throw new Error('Delivery unconfirmed. Inspect the Office before retrying.');
+      departmentDrafts.delete(id);
+      composingDepartment = null;
+      await openSession(accepted.sessionId);
+    } catch (error) {
+      toast('error', plainError(error));
+    } finally {
+      departmentSubmitting.delete(id);
+      if (dir === state.directory) void inspect();
+    }
+  },
+  advisorReview: async (arg?: { dept?: string }) => {
+    const id = arg?.dept;
+    if (!id || !state.directory) return;
+    try {
+      const result = await callService<{ sessionId?: string }>('/advisor/start', { directory: state.directory, departmentId: id });
+      if (typeof result.sessionId !== 'string') throw new Error('The advisor session was not created.');
+      await openSession(result.sessionId);
+      void loadJournal();
+    } catch (error) {
+      toast('error', plainError(error));
+    }
+  },
+  collectReview: async (arg?: { dept?: string; session?: string }) => {
+    if (!arg?.session || !state.directory) return;
+    try {
+      const result = await callService<{ added?: string[]; reason?: string }>('/advisor/collect', {
+        directory: state.directory,
+        sessionId: arg.session,
+      });
+      const added = Array.isArray(result.added) ? result.added.length : 0;
+      toast(added ? 'success' : 'info', added
+        ? `${added} lesson${added === 1 ? '' : 's'} saved for this team.`
+        : (result.reason || 'No lessons found.'));
+      void loadJournal();
+    } catch (error) {
+      toast('error', plainError(error));
+    }
+  },
+  addDepartment: () => {
+    const list = structureDepartments();
+    if (list.length >= 8) {
+      toast('error', 'At most 8 departments.');
+      return;
+    }
+    const agents = primaryAgents(state.inspect?.agents ?? []) as { id: string }[];
+    const used = new Set(list.map((department) => department.id));
+    let number = list.length + 1;
+    let id = `department-${number}`;
+    while (used.has(id)) id = `department-${++number}`;
+    list.push({
+      id,
+      name: `Department ${list.length + 1}`,
+      purpose: '',
+      lead: agents[0]?.id ?? '',
+      members: [],
+    });
+    departmentEdits = list;
+    structureEdited = true;
+    render();
+  },
+  removeDepartment: (arg?: { dept?: string }) => {
+    if (!arg?.dept) return;
+    departmentEdits = structureDepartments().filter((department) => department.id !== arg.dept);
+    structureEdited = true;
+    render();
   },
 };
 
@@ -892,6 +1143,10 @@ function changeDirectory(directory: string | null) {
   state.inspect = null; state.inspectState = 'idle'; state.snapshotState = 'loading';
   state.rootId = null; state.talkDraft = ''; state.rootTitle = '';
   state.cost = null; state.costState = 'idle'; state.costError = '';
+  journalGeneration++;
+  state.journal = {}; state.journalState = 'idle'; state.journalError = '';
+  departmentEdits = null; structureEdited = false;
+  composingDepartment = null; departmentDrafts.clear(); departmentSubmitting.clear();
 }
 
 function officeSessions(): GuestSessionRecord[] {
@@ -902,10 +1157,36 @@ function officeSessions(): GuestSessionRecord[] {
 root.addEventListener('input', e => {
   const field = e.target as HTMLInputElement;
   if (field.id === 'office-task' && state.directory) taskDrafts.set(state.directory,field.value);
+  if (field.id?.startsWith('dept-task-') && composingDepartment) departmentDrafts.set(composingDepartment, field.value);
   if (field.id?.startsWith('setting-')) {
     settingEdits.set(field.id.slice(8), field.value);
     const preview = document.getElementById('settings-preview');
     if (preview) preview.textContent = settingsPreview();
+  }
+  if (field.dataset.officeField === 'advisor') {
+    structureEdited = true;
+    const preview = document.getElementById('settings-preview');
+    if (preview) preview.textContent = settingsPreview();
+  }
+  if (field.dataset.deptField && field.dataset.dept) {
+    structureEdited = true;
+    const list = (departmentEdits ??= structureDepartments());
+    const department = list.find((item) => item.id === field.dataset.dept);
+    if (department) {
+      const kind = field.dataset.deptField;
+      if (kind === 'member') {
+        department.members = field.checked
+          ? [...new Set([...department.members, field.value])]
+          : department.members.filter((member) => member !== field.value);
+      } else if (kind === 'lead') {
+        department.lead = field.value;
+        department.members = department.members.filter((member) => member !== field.value);
+      } else if (kind === 'name' || kind === 'purpose') {
+        department[kind] = field.value;
+      }
+      const preview = document.getElementById('settings-preview');
+      if (preview) preview.textContent = settingsPreview();
+    }
   }
   if (e.target instanceof HTMLTextAreaElement && e.target.id === 'talk-draft') handlers.talkInput(e.target.value);
   if (e.target instanceof HTMLTextAreaElement && e.target.id === 'contrib-text') state.contribText = e.target.value;
@@ -916,7 +1197,12 @@ root.addEventListener('click', e => {
   const button = (e.target as Element).closest<HTMLElement>('[data-action],[data-scope]');
   if (button?.dataset.scope) handlers.setScope(button.dataset.scope);
   const key = button?.dataset.action;
-  if (key && ['askOffice','submitTask','cancelTask','copySetup','refresh','refreshInspect','refreshCost','saveSettings','openIssueDraft','cancelContribute','talkOpen','copyDraft','talkClear'].includes(key)) (handlers[key as keyof typeof handlers] as () => void)();
+  if (key && ['askOffice','submitTask','cancelTask','copySetup','refresh','refreshInspect','refreshCost','saveSettings','openIssueDraft','cancelContribute','talkOpen','copyDraft','talkClear','askDepartment','cancelDepartment','sendDepartment','advisorReview','collectReview','addDepartment','removeDepartment'].includes(key)) {
+    (handlers[key as keyof typeof handlers] as (arg?: { dept?: string; session?: string }) => void)({
+      dept: button?.dataset.dept,
+      session: button?.dataset.session,
+    });
+  }
   const id = (e.target as Element).closest<HTMLElement>('[data-session]')?.dataset.session;
   if (id && officeSessions().some(s => s.id === id)) void openSession(id);
   const record = (e.target as Element).closest<HTMLElement>('[data-record]')?.dataset.record;

@@ -1,5 +1,5 @@
 /**
- * Agent Office — departments over the project's existing agents.
+ * Office Steward — departments over the project's existing agents.
  *
  * A department names a lead and its members. It never creates, spawns or owns
  * an agent: every id here is an agent the host already exposes.

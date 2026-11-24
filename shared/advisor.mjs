@@ -1,5 +1,5 @@
 /**
- * Agent Office — the advisor loop.
+ * Office Steward — the advisor loop.
  *
  * The advisor is an OpenCode agent the user picked. The Office does three
  * things and nothing more: it shows the advisor the department's finished,

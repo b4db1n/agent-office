@@ -47,5 +47,5 @@ export function officeError(error) {
   // execFile errors can contain the complete command, including a user's prompt.
   if (error?.cmd || error?.stderr || error?.stdout) return 'OpenCode did not complete the request. Check the Office before retrying.';
   if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return 'The selected project folder is not available.';
-  return typeof error?.message === 'string' ? error.message.slice(0, 240) : 'Agent Office could not complete the request.';
+  return typeof error?.message === 'string' ? error.message.slice(0, 240) : 'Office Steward could not complete the request.';
 }

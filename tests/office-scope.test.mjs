@@ -13,7 +13,7 @@ test('switching roots reuses the project snapshot without leaking a different te
 });
 test('contributions use an unsubmitted public editor and reject private identifiers', () => {
   const target = new URL(issuePreview(issueExample));
-  assert.equal(target.pathname,'/b4db1n/agent-office/issues/new');
+  assert.equal(target.pathname,'/b4db1n/office-steward/issues/new');
   assert.equal(target.searchParams.get('body'),issueExample);
   assert.throws(()=>issuePreview('My fixture is at ~/example'));
 });

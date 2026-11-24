@@ -1,10 +1,11 @@
 {
-  "name": "agent-office",
-  "version": "0.1.2",
+  "name": "office-steward",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "An office for your OpenCode team, in OpenChamber and the terminal.",
+  "description": "Office Steward: an office for your OpenCode team, in OpenChamber and the terminal.",
   "bin": {
+    "office-steward": "./companion/cli.mjs",
     "agent-office": "./companion/cli.mjs"
   },
   "openchamber": {
@@ -13,7 +14,7 @@
       "openchamber": ">=2.8.0"
     },
     "id": "agent-office",
-    "name": "Agent Office",
+    "name": "Office Steward",
     "icon": "team",
     "contributes": {
       "panel": {
@@ -21,7 +22,7 @@
       },
       "statusSection": {
         "entry": "panel/index.html",
-        "title": "Agent Office",
+        "title": "Office Steward",
         "requiresProject": true
       },
       "background": {
@@ -65,11 +66,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/b4db1n/agent-office.git"
+    "url": "git+https://github.com/b4db1n/office-steward.git"
   },
-  "homepage": "https://github.com/b4db1n/agent-office#readme",
+  "homepage": "https://github.com/b4db1n/office-steward#readme",
   "bugs": {
-    "url": "https://github.com/b4db1n/agent-office/issues"
+    "url": "https://github.com/b4db1n/office-steward/issues"
   },
   "devDependencies": {
     "playwright": "1.60.0"

@@ -1,6 +1,6 @@
 # Roadmap
 
-Agent Office is developed in public. The direction is human. Most small changes are
+Office Steward is developed in public. The direction is human. Most small changes are
 implemented by free models against the queue below, checked by the repository's tests and
 build, and committed with the commands that were actually run. A change that fails its
 check is reverted, not patched until it looks green.
@@ -100,16 +100,20 @@ default team's lead, without adding a second source of truth.
 
 ## Owner decisions
 
-- **Name.** Five other GitHub projects are called Agent Office or close to it, all a
-  cartoon-office metaphor. The name buries this project in search. The user accepted a rename
-  to **Office Steward**; it is queued after the current feature work.
+- **Name.** Five other GitHub projects were called Agent Office or close to it, all a
+  cartoon-office metaphor, which buried this project in search. The user accepted the rename,
+  and as of 2026-11-23 the product and the repository are **Office Steward**
+  (github.com/b4db1n/office-steward). The extension id `agent-office`, the state folders and
+  the environment variable names keep their old values so existing installs and settings keep
+  working; GitHub redirects the old repository URL and the `agent-office` command remains an
+  alias.
 - **Publishing.** This repository is the only distribution channel. No package registry, no
   hosted service, no telemetry. Green commits are pushed automatically.
 
 ## Not planned
 
 - A hosted backend, accounts, or telemetry.
-- Owning or spawning agents. Agent Office observes the host's sessions and dispatches
+- Owning or spawning agents. Office Steward observes the host's sessions and dispatches
   explicitly; it is not another orchestrator.
 - Paid models as a requirement. Any model the host already has may be used, but nothing here
   needs a paid key.

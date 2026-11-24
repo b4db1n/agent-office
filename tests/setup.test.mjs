@@ -191,7 +191,7 @@ test('selectLead: accepts id-keyed map of agent records', () => {
 });
 
 test('SETUP_PROMPT discovers the companion, never picks a file, and gates writes', () => {
-  assert.match(SETUP_PROMPT, /command -v agent-office/);
+  assert.match(SETUP_PROMPT, /command -v office-steward/);
   assert.ok(SETUP_PROMPT.includes(OFFICE_REPO_URL));
   assert.match(SETUP_PROMPT, /Do not ask me to choose a file or folder/);
   assert.match(SETUP_PROMPT, /no file may be written before that approval/i);

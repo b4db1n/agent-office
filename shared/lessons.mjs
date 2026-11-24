@@ -1,5 +1,5 @@
 /**
- * Agent Office — the journal behind a department's lessons.
+ * Office Steward — the journal behind a department's lessons.
  *
  * A lesson is a short, sourced statement the advisor derived from finished
  * work. The journal is append-only from the user's point of view: nothing here

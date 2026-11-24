@@ -59,7 +59,7 @@ function officeError(error) {
     return "OpenCode did not complete the request. Check the Office before retrying.";
   if (error?.code === "ENOENT" || error?.code === "ENOTDIR")
     return "The selected project folder is not available.";
-  return typeof error?.message === "string" ? error.message.slice(0, 240) : "Agent Office could not complete the request.";
+  return typeof error?.message === "string" ? error.message.slice(0, 240) : "Office Steward could not complete the request.";
 }
 
 // shared/departments.mjs
@@ -236,7 +236,7 @@ async function readState() {
       return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
     } catch (error) {
       if (error.code !== "ENOENT")
-        throw new Error("Agent Office could not read its saved settings. No changes were made.");
+        throw new Error("Office Steward could not read its saved settings. No changes were made.");
     }
   }
   return emptyState();
@@ -434,7 +434,7 @@ async function withSettingsLock(file, fn) {
       if (error.code !== "EEXIST")
         throw error;
       if (attempt >= 60)
-        throw new Error("Agent Office settings are busy. Try again.");
+        throw new Error("Office Steward settings are busy. Try again.");
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
@@ -686,10 +686,10 @@ function selectLead(agents, selected) {
   }
   return { selected: null, available, nextAction: LEAD_NEXT_ACTION.CHOOSE_LEAD };
 }
-var OFFICE_REPO_URL = "https://github.com/b4db1n/agent-office";
+var OFFICE_REPO_URL = "https://github.com/b4db1n/office-steward";
 var PREVIEW_COMMAND = '(d="$HOME/.config/openchamber/extensions/agent-office"; test -f "$d/shared/family.mjs" && node "$d/companion/setup.mjs" --templates --plugin)';
 var SETUP_HELP = [
-  "Agent Office setup - preview by default; no project changes without --apply.",
+  "Office Steward setup - preview by default; no project changes without --apply.",
   "",
   "From the target project, preview with one command:",
   PREVIEW_COMMAND,
@@ -707,11 +707,11 @@ var SETUP_HELP = [
 ].join(`
 `);
 var SETUP_PROMPT = [
-  "Set up Agent Office in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.",
+  "Set up Office Steward in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.",
   "",
   "0. PREREQUISITES AND COMPANION",
   "   - Check that `node` and `opencode` (OpenCode 2) are on PATH. If either is missing, state that prerequisite and stop before any write.",
-  "   - Find the installed companion yourself: resolve `command -v agent-office`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.",
+  "   - Find the installed companion yourself: resolve `command -v office-steward`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.",
   `   - If missing, stop at the GitHub install link: ${OFFICE_REPO_URL}. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.`,
   "",
   "1. DISCOVERY (read only)",

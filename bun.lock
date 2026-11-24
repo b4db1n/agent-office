@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "agent-office",
+      "name": "office-steward",
       "dependencies": {
         "@openchamber/sdk": "2.8.0",
       },

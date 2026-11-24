@@ -16,7 +16,7 @@ import { departmentsFor, normalizeDepartments, primaryAgents } from '../shared/d
 
 const host = connectHost();
 const rootEl = document.querySelector<HTMLElement>('#root');
-if (!rootEl) throw new Error('Agent Office page has no root element.');
+if (!rootEl) throw new Error('Office Steward page has no root element.');
 const root: HTMLElement = rootEl;
 
 type ModelRef = { id: string; providerID: string; variant?: string };
@@ -148,8 +148,8 @@ function plainError(error: unknown): string {
     const code = (error as { code?: unknown }).code;
     const message = (error as { message?: unknown }).message;
     if (typeof code === 'string') {
-      if (code === 'NO_SERVICE') return 'The Agent Office service is off. Allow it in Settings → Extensions.';
-      if (code === 'SERVICE_FAILED') return 'The Agent Office service stopped. Try again.';
+      if (code === 'NO_SERVICE') return 'The Office Steward service is off. Allow it in Settings → Extensions.';
+      if (code === 'SERVICE_FAILED') return 'The Office Steward service stopped. Try again.';
       if (code === 'NOT_GRANTED') return 'OpenChamber did not grant that permission.';
       if (code === 'HOST_TIMEOUT') return 'OpenChamber did not answer. Try again.';
       if (code === 'UNSUPPORTED') return 'This OpenChamber surface cannot do that.';
@@ -175,7 +175,7 @@ async function callService<T = Record<string, unknown>>(path: string, payload?: 
   }
   const record = isRecord(parsed) ? parsed : {};
   if (result.status < 200 || result.status >= 300 || record.ok === false) {
-    const error = new Error(typeof record.message === 'string' ? record.message : 'The Agent Office service refused that.');
+    const error = new Error(typeof record.message === 'string' ? record.message : 'The Office Steward service refused that.');
     (error as { code?: string }).code = typeof record.code === 'string' ? record.code : undefined;
     throw error;
   }
@@ -599,12 +599,12 @@ function renderStatus(): string {
   const health = steward(state);
   const preview = settingEdits.size > 0;
   return `<section class="ao-shell ao-status">
-    <h2 class="ao-title">Agent Office · ${preview ? 'Setup preview pending' : esc(health.state)}</h2>
+    <h2 class="ao-title">Office Steward · ${preview ? 'Setup preview pending' : esc(health.state)}</h2>
     <p class="ao-sub" title="${esc(state.directory)}">${esc(state.directory?.split('/').pop() || 'No project')}</p>
     <div>${preview ? 'Review your unsaved changes in Settings.' : esc(health.reason)}</div>
     ${health.configured ? `<div>Lead: <b>${esc(state.inspect?.settings.lead)}</b> · ${esc(health.model ?? 'Unknown model')} (${esc(health.source)})</div>` : ''}
     ${health.state === 'Setup required' ? setupControls() : ''}
-    ${health.configured ? `<div><strong>Office Steward</strong> · current work</div>
+    ${health.configured ? `<div><strong>Current work</strong></div>
       ${health.records.length ? health.records.map(r => `<button class="ao-btn" data-record="${esc(r.id)}" data-current="${r.id === state.rootId ? 'true' : 'false'}">${esc(r.agent || r.title)} · ${esc(r.label)}${r.id === state.rootId ? ' · viewing' : ''}</button>`).join('')
       : '<span class="ao-muted">No confirmed Office team visible for this project.</span>'}
       ${state.rootId && health.records.length && !health.records.some(r => r.id === state.rootId) ? `<p class="ao-muted">Viewing ${esc(state.rootTitle || state.rootId)} — not part of this Office team.</p>` : ''}` : ''}
@@ -689,7 +689,7 @@ function renderOffice(): string {
   return `
     <div class="ao-shell">
       <div>
-        <h2 class="ao-title">Agent Office</h2>
+        <h2 class="ao-title">Office Steward</h2>
         <p class="ao-sub">${esc(state.rootTitle || state.directory || 'No session')}</p>
       </div>
       ${renderDepartments()}

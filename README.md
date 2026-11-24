@@ -1,20 +1,20 @@
-# Agent Office
+# Office Steward
 
-Agent Office shows the people and processes behind a coding task: the selected lead, its actual child sessions, who needs an answer, and which work has a result. Use your existing OpenCode provider and models. No Office account or hosted service is required.
+Office Steward shows the people and processes behind a coding task: the selected lead, its actual child sessions, who needs an answer, and which work has a result. Use your existing OpenCode provider and models. No Office account or hosted service is required.
 
 ## Install from GitHub
 
-[Install Agent Office](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2Fb4db1n%2Fagent-office)
+[Install Office Steward](openchamber://extensions/install?url=https%3A%2F%2Fgithub.com%2Fb4db1n%2Foffice-steward)
 
-This opens OpenChamber's install confirmation for the GitHub repository. If the link does not open, paste `openchamber://extensions/install?url=https://github.com/b4db1n/agent-office` into an OpenChamber chat and open the link there. **Skip “Add from folder.”** No local file or folder is needed.
+This opens OpenChamber's install confirmation for the GitHub repository. If the link does not open, paste `openchamber://extensions/install?url=https://github.com/b4db1n/office-steward` into an OpenChamber chat and open the link there. **Skip “Add from folder.”** No local file or folder is needed.
 
-After installing, enable **Agent Office** in **Work Status → Panel Sections**.
+After installing, enable **Office Steward** in **Work Status → Panel Sections**.
 
 ## Start here
 
 1. Open a project. Before configuration, the compact **Work Status** section reads **Setup required** and offers **Copy setup prompt**; paste it into a project chat, or use the [getting-started guide](docs/GETTING-STARTED.md#the-chat-prompt). Once configured, find the same prompt under **Settings → Revisit setup**.
 2. Review the existing agents, model rates and exact proposed changes. Any visible primary agent can lead. Approve the project choices once, then check the repeated preview until the saved result is unchanged.
-3. When configured, the compact section shows the chosen lead, the effective model and its source, plus a live **Office Steward · current work** list. It reads **Setup preview pending** while unsaved Settings edits wait. **Ask Office lead** appears there only when the status is **Ready** with no pending preview and no task being composed.
+3. When configured, the compact section shows the chosen lead, the effective model and its source, plus a live **Current work** list. It reads **Setup preview pending** while unsaved Settings edits wait. **Ask Office lead** appears there only when the status is **Ready** with no pending preview and no task being composed.
 4. For a first task, try: “Delegate a small change to the selected specialist. Add a `double` function and a check that `double(4)` returns `8`. Run the check yourself and report its result.” Open a person in the Office to inspect the actual child session.
 5. **Ask Office lead** has two entry points: that **Ready** button and the action on the menu of **your own message** in a chat. Both explicitly dispatch a new lead root; neither is an `@` attachment. **Talk** only opens an existing session in OpenChamber; it never sends a message or answers a permission request. A specialist model is a preference, not a guarantee: Settings shows the requested lead model; a model on an assistant message is the host's **observed route**, not a billing receipt. **Completed** means the host reported completion — no reply, artifact or verified result is guaranteed; check with a local test. “Host default” does not mean free.
 
@@ -36,7 +36,7 @@ The compact section can also read **Checking**, **Degraded** (agent/model discov
 
 ## Terminal preview
 
-With Agent Office installed from the GitHub release and OpenCode 2 already running, run this from **your project**. It previews optional files without downloading or starting anything:
+With Office Steward installed from the GitHub release and OpenCode 2 already running, run this from **your project**. It previews optional files without downloading or starting anything:
 
 ```sh
 (d="$HOME/.config/openchamber/extensions/agent-office"; test -f "$d/shared/family.mjs" && node "$d/companion/setup.mjs" --templates --plugin)
@@ -46,9 +46,13 @@ See the [terminal guide](docs/GETTING-STARTED.md#terminal-preview) for how to ap
 
 ## Permissions and scope
 
-The extension requests session metadata to draw the Office and open the selected chat. Its local service invokes `opencode` to discover agents and models, store Office preferences, and dispatch explicitly requested work. Office Steward is a deterministic projection of confirmed session metadata scoped to the current project's Office team: refresh and replay rebuild the same records, nothing outside that scope is shown, and it never sends work or runs a model. The background message action only forwards the message you chose, and only when you invoke it; it never dispatches or spends on its own. The optional OpenCode plugin runs inside OpenCode. Agent Office does not need a provider key, a GitHub token, or access to every chat transcript from the OpenChamber panel.
+The extension requests session metadata to draw the Office and open the selected chat. Its local service invokes `opencode` to discover agents and models, store Office preferences, and dispatch explicitly requested work. Office Steward is a deterministic projection of confirmed session metadata scoped to the current project's Office team: refresh and replay rebuild the same records, nothing outside that scope is shown, and it never sends work or runs a model. The background message action only forwards the message you chose, and only when you invoke it; it never dispatches or spends on its own. The optional OpenCode plugin runs inside OpenCode. Office Steward does not need a provider key, a GitHub token, or access to every chat transcript from the OpenChamber panel.
 
 Contribution suggestions start as editable synthetic examples. Cancel to discard. Opening the GitHub issue editor does not publish anything; GitHub's **Create** button is the final submission.
+
+## Name and compatibility
+
+This project was previously published as Agent Office. The extension id stays `agent-office`, and so do its state folders (`~/.config/agent-office`, `~/.local/share/agent-office`) and environment variable names, so existing installs and saved settings keep working. GitHub redirects the old repository URL, and the `agent-office` command remains an alias of `office-steward`.
 
 ## Development
 

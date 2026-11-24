@@ -1,5 +1,5 @@
 /**
- * Agent Office — shared settings helpers.
+ * Office Steward — shared settings helpers.
  */
 
 import { mkdir, open, readFile, rename, realpath, unlink, writeFile } from 'node:fs/promises';
@@ -55,7 +55,7 @@ async function readState() {
       }
       return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
     } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error('Agent Office could not read its saved settings. No changes were made.');
+      if (error.code !== 'ENOENT') throw new Error('Office Steward could not read its saved settings. No changes were made.');
     }
   }
   return emptyState();
@@ -268,7 +268,7 @@ async function withSettingsLock(file, fn) {
       handle = await open(lock, 'wx', 0o600);
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      if (attempt >= 60) throw new Error('Agent Office settings are busy. Try again.');
+      if (attempt >= 60) throw new Error('Office Steward settings are busy. Try again.');
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }

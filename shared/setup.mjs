@@ -1,5 +1,5 @@
 /**
- * Agent Office — shared setup helpers.
+ * Office Steward — shared setup helpers.
  *
  * Dependency-free and side-effect free, so this can be imported by service
  * code, panel code, or a one-off Node/Bun script. Nothing here mutates its
@@ -96,7 +96,7 @@ export function selectLead(agents, selected) {
 }
 
 /** Public install source. The README deep link carries the same https URL. */
-export const OFFICE_REPO_URL = 'https://github.com/b4db1n/agent-office';
+export const OFFICE_REPO_URL = 'https://github.com/b4db1n/office-steward';
 
 /**
  * One copyable terminal command for a preview, run from the target project.
@@ -108,7 +108,7 @@ export const PREVIEW_COMMAND =
 
 /** Companion help, mirrored verbatim in docs/GETTING-STARTED.md. */
 export const SETUP_HELP = [
-  'Agent Office setup - preview by default; no project changes without --apply.',
+  'Office Steward setup - preview by default; no project changes without --apply.',
   '',
   'From the target project, preview with one command:',
   PREVIEW_COMMAND,
@@ -126,16 +126,16 @@ export const SETUP_HELP = [
 ].join('\n');
 
 /**
- * Prompt that drives an idempotent Agent Office setup: discovery, preview,
+ * Prompt that drives an idempotent Office Steward setup: discovery, preview,
  * setup, smoke. Safe to paste into a fresh session that owns the project.
  * It locates the companion itself and never asks the user to pick a file.
  */
 export const SETUP_PROMPT = [
-  'Set up Agent Office in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.',
+  'Set up Office Steward in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.',
   '',
   '0. PREREQUISITES AND COMPANION',
   '   - Check that `node` and `opencode` (OpenCode 2) are on PATH. If either is missing, state that prerequisite and stop before any write.',
-  '   - Find the installed companion yourself: resolve `command -v agent-office`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.',
+  '   - Find the installed companion yourself: resolve `command -v office-steward`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.',
   `   - If missing, stop at the GitHub install link: ${OFFICE_REPO_URL}. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.`,
   '',
   '1. DISCOVERY (read only)',

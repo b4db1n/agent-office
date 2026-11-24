@@ -1,5 +1,5 @@
 /**
- * Agent Office — pure, read-only cost accounting helpers.
+ * Office Steward — pure, read-only cost accounting helpers.
  *
  * Classification rules (no I/O in this module):
  *  - A finite, non-negative *reported* cost is authoritative even when it is 0.

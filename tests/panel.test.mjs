@@ -462,9 +462,9 @@ browserTest('configured Work Status is a compact dashboard with an actionable en
   const { browser, frame } = await start({ surface: 'status', sessions, inspect: READY_INSPECT, coverage: READY_COVERAGE });
   try {
     const status = frame.locator('.ao-status');
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     const text = await status.innerText();
-    assert.match(text, /Agent Office · Ready/);
+    assert.match(text, /Office Steward · Ready/);
     assert.match(text, /Lead: lead/);
     assert.match(text, /opencode-go\/beam-free \(project\)/);
     assert.match(text, /Office Steward/);
@@ -490,13 +490,13 @@ browserTest('Work Status shows onboarding, not a configured dashboard, when setu
   const { browser, frame } = await start({ surface: 'status', inspect, coverage: READY_COVERAGE, sessions: [session('root-1', null)] });
   try {
     const status = frame.locator('.ao-status');
-    await frame.getByText('Agent Office · Setup required').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Setup required').waitFor({ timeout: 5000 });
     const text = await status.innerText();
-    assert.match(text, /Agent Office · Setup required/);
+    assert.match(text, /Office Steward · Setup required/);
     assert.match(text, /Preview the available agents and choose a lead\./);
     assert.match(text, /Copy setup prompt/);
     assert.doesNotMatch(text, /Lead: lead/);
-    assert.doesNotMatch(text, /Office Steward/);
+    assert.doesNotMatch(text, /Current work/);
     assert.equal(await frame.locator('button[data-action="copySetup"]').count(), 1);
     assert.equal(await frame.locator('button[data-action="askOffice"]').count(), 0);
   } finally { await browser.close(); }
@@ -506,9 +506,9 @@ browserTest('Work Status names degraded and attention states with recovery contr
   const sessions = [session('root-1', null), session('child', 'root-1')];
   const degraded = await start({ surface: 'status', sessions, inspect: READY_INSPECT, coverage: [] });
   try {
-    await degraded.frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
+    await degraded.frame.getByText('Office Steward · Degraded').waitFor({ timeout: 5000 });
     const text = await degraded.frame.locator('.ao-status').innerText();
-    assert.match(text, /Agent Office · Degraded/);
+    assert.match(text, /Office Steward · Degraded/);
     assert.match(text, /Live session coverage is unavailable/);
     assert.equal(await degraded.frame.locator('button[data-action="refresh"]').count(), 1);
     assert.equal(await degraded.frame.locator('button[data-view="settings"]').count(), 1);
@@ -517,9 +517,9 @@ browserTest('Work Status names degraded and attention states with recovery contr
   const waiting = [session('root-1', null, { activity: 'waiting-question' }), session('child', 'root-1')];
   const attention = await start({ surface: 'status', sessions: waiting, inspect: READY_INSPECT, coverage: READY_COVERAGE });
   try {
-    await attention.frame.getByText('Agent Office · Needs attention').waitFor({ timeout: 5000 });
+    await attention.frame.getByText('Office Steward · Needs attention').waitFor({ timeout: 5000 });
     const text = await attention.frame.locator('.ao-status').innerText();
-    assert.match(text, /Agent Office · Needs attention/);
+    assert.match(text, /Office Steward · Needs attention/);
     assert.match(text, /Open the highlighted session to inspect its status\./);
     assert.match(text, /root-1 · Waiting for an answer/);
   } finally { await attention.browser.close(); }
@@ -554,7 +554,7 @@ browserTest('descendant chat: Work Status and Open Office show the same Office f
     inspect: READY_INSPECT, coverage: READY_COVERAGE,
   });
   try {
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     const statusIds = await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort());
     assert.deepEqual(statusIds, ['child', 'grandchild', 'root-1']);
     assert.deepEqual(await frame.locator('[data-record][data-current="true"]').evaluateAll(els => els.map(e => e.dataset.record)), ['child']);
@@ -580,7 +580,7 @@ browserTest('unrelated chat: both views exclude its subtree and show only confir
     inspect: READY_INSPECT, coverage: READY_COVERAGE,
   });
   try {
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     const statusIds = await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort());
     assert.deepEqual(statusIds, ['child', 'root-1']);
     assert.equal(await frame.locator('[data-current="true"]').count(), 0);
@@ -599,18 +599,18 @@ browserTest('missing project id or unready coverage blocks Ready and leaks no re
     surface: 'status', sessions, inspect: READY_INSPECT, coverage: READY_COVERAGE,
   });
   try {
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     const subId = await page.evaluate(() => window.__subs.find(s => s.kind === 'sessions')?.id);
     const push = (snap) => page.evaluate(({ subId, snap }) => window.__push(subId, snap), { subId, snap });
 
     // No projectId at all: degrade, do not fall back to the project's teams.
     await push({ kind: 'sessions', state: 'ready', sessions });
-    await frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Degraded').waitFor({ timeout: 5000 });
     assert.equal(await frame.locator('[data-record]').count(), 0);
 
     // Recovery restores exactly the confirmed family; nothing stale leaks.
     await push({ kind: 'sessions', state: 'ready', projectId: 'p-a', coverage: READY_COVERAGE, sessions });
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     assert.deepEqual(await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort()), ['child', 'root-1']);
 
     // Coverage that exists but is not ready must also block Ready and records.
@@ -630,7 +630,7 @@ browserTest('dashboard fits 390x844 and 1280x800 without horizontal overflow', a
       inspect: READY_INSPECT, coverage: READY_COVERAGE,
     });
     try {
-      await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+      await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
       const noOverflow = () => frame.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
       assert.equal(await noOverflow(), true, `status overflow at ${viewport.width}`);
       assert.equal(await frame.locator('button[data-view="office"]').isVisible(), true);
@@ -650,7 +650,7 @@ browserTest('held dispatch: duplicate attempts send once, navigate once, and Esc
     dispatchReplies: [{ sessionId: 'dispatched-1', directory: DIR_A }],
   });
   try {
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     await frame.locator('[data-action="askOffice"]').click();
     await frame.locator('#office-task').waitFor({ timeout: 5000 });
     assert.equal(await frame.evaluate(() => document.activeElement?.id), 'office-task');
@@ -697,11 +697,11 @@ browserTest('refresh failure degrades honestly and recovers when the service ans
     failPaths: ['/inspect'],
   });
   try {
-    await frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
-    assert.match(await frame.locator('.ao-status').innerText(), /The Agent Office service stopped\. Try again\./);
+    await frame.getByText('Office Steward · Degraded').waitFor({ timeout: 5000 });
+    assert.match(await frame.locator('.ao-status').innerText(), /The Office Steward service stopped\. Try again\./);
     await page.evaluate(() => { window.__failPaths.length = 0; });
     await frame.locator('button[data-action="refresh"]').click();
-    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.getByText('Office Steward · Ready').waitFor({ timeout: 5000 });
     assert.equal(await frame.locator('[data-record]').count(), 1);
   } finally { await browser.close(); }
 });
@@ -745,7 +745,7 @@ browserTest('Contribute cancel emits no URL and restores the synthetic example',
     await frame.locator('[data-action="openIssueDraft"]').click();
     await page.waitForFunction(() => window.__urls.length === 1);
     const target = new URL((await page.evaluate(() => window.__urls))[0]);
-    assert.equal(target.pathname, '/b4db1n/agent-office/issues/new');
+    assert.equal(target.pathname, '/b4db1n/office-steward/issues/new');
     assert.equal(target.searchParams.get('body'), edited);
   } finally { await browser.close(); }
 });

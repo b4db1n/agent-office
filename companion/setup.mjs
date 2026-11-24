@@ -171,7 +171,7 @@ async function main() {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   main().catch((error) => {
-    console.error(error instanceof Error ? error.message : 'Agent Office setup failed.');
+    console.error(error instanceof Error ? error.message : 'Office Steward setup failed.');
     process.exitCode = 1;
   });
 }

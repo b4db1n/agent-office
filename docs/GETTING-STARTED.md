@@ -1,22 +1,22 @@
-# Getting started with Agent Office
+# Getting started with Office Steward
 
 ## Install in OpenChamber (GitHub, no local file selection)
 
-Click **Install Agent Office** in the [README](../README.md). If your browser will not open it, paste `openchamber://extensions/install?url=https://github.com/b4db1n/agent-office` into an OpenChamber chat and open the link there. OpenChamber asks before installing from GitHub. Skip **Add from folder**.
+Click **Install Office Steward** in the [README](../README.md). If your browser will not open it, paste `openchamber://extensions/install?url=https://github.com/b4db1n/office-steward` into an OpenChamber chat and open the link there. OpenChamber asks before installing from GitHub. Skip **Add from folder**.
 
-Then enable **Agent Office** in **Work Status → Panel Sections** and open a project. Before configuration the compact **Work Status** section reads **Setup required** and offers **Copy setup prompt**; after configuration, open **Settings → Revisit setup** for the same prompt. Review an available lead, specialist preference and costs together before approving anything.
+Then enable **Office Steward** in **Work Status → Panel Sections** and open a project. Before configuration the compact **Work Status** section reads **Setup required** and offers **Copy setup prompt**; after configuration, open **Settings → Revisit setup** for the same prompt. Review an available lead, specialist preference and costs together before approving anything.
 
 ## The chat prompt
 
 Use **Copy setup prompt** from Work Status (unconfigured) or **Settings → Revisit setup** (configured), or copy the text below. The agent finds the companion and stops after previewing until you approve the changes.
 
 ```text
-Set up Agent Office in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.
+Set up Office Steward in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.
 
 0. PREREQUISITES AND COMPANION
    - Check that `node` and `opencode` (OpenCode 2) are on PATH. If either is missing, state that prerequisite and stop before any write.
-   - Find the installed companion yourself: resolve `command -v agent-office`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.
-   - If missing, stop at the GitHub install link: https://github.com/b4db1n/agent-office. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.
+   - Find the installed companion yourself: resolve `command -v office-steward`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.
+   - If missing, stop at the GitHub install link: https://github.com/b4db1n/office-steward. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.
 
 1. DISCOVERY (read only)
    - Run the companion CLI `inspect` from this directory. If OpenCode has not loaded the project, tell me how to retry without creating a disposable chat.
@@ -52,7 +52,7 @@ With Node.js, the current companion installed and OpenCode 2 running, run this f
 The companion's `--help` output (the same text printed by `node companion/setup.mjs --help` from the installed companion) is:
 
 ```text
-Agent Office setup - preview by default; no project changes without --apply.
+Office Steward setup - preview by default; no project changes without --apply.
 
 From the target project, preview with one command:
 (d="$HOME/.config/openchamber/extensions/agent-office"; test -f "$d/shared/family.mjs" && node "$d/companion/setup.mjs" --templates --plugin)
@@ -66,7 +66,7 @@ Companion options (node <checkout>/companion/setup.mjs):
   --help, -h      Show this help.
 
 Prerequisites: Node.js and OpenCode 2 (`opencode` on PATH).
-Install in OpenChamber from https://github.com/b4db1n/agent-office; no local file selection is needed.
+Install in OpenChamber from https://github.com/b4db1n/office-steward; no local file selection is needed.
 ```
 
 Preview only the optional groups you want (`--plugin` and/or `--templates`). Recheck the preview before applying the same options with `--apply`. Existing and host-provided definitions are skipped. The default desktop path needs neither group.
@@ -75,7 +75,7 @@ Preview only the optional groups you want (`--plugin` and/or `--templates`). Rec
 
 **Ask Office lead** has two entry points: the button in the compact Work Status section, shown only while the status is **Ready** with no pending Settings preview and no task being composed, and the **Ask Office lead** action on the menu of **your own message** in a chat. Both explicitly create one new lead root and link the source message as metadata; neither is an `@` attachment. **Talk** opens an existing session in OpenChamber; copy the draft and send it yourself — Talk never sends a message or answers a permission request. Terminal `team ROOT` shows session selections and waiting requests; `cost ROOT` shows models observed in assistant messages. `stop SESSION --root ROOT` verifies membership before interrupting. A failed waiting-state read is unknown, not an invitation to send.
 
-The compact section reads **Setup required** before configuration (with **Copy setup prompt**), then shows the chosen lead, the effective model and its source, and the **Office Steward · current work** list. It can also read **Checking**, **Degraded** (discovery or live session coverage unavailable), **Needs attention** (unavailable lead/model, finite budget, zero parallelism, or a pending/uncertain delivery), and **Ready**. The Steward is a deterministic projection of confirmed session metadata scoped to this project's Office team: refresh and replay rebuild the same records, nothing outside that scope is shown, and it never sends work or runs a model. No background action spends on its own — the message action only forwards the message you chose, and only when you invoke it. **Completed** only means the host reported completion; it guarantees no reply, artifact or verified result — verify with a local check.
+The compact section reads **Setup required** before configuration (with **Copy setup prompt**), then shows the chosen lead, the effective model and its source, and the **Current work** list. It can also read **Checking**, **Degraded** (discovery or live session coverage unavailable), **Needs attention** (unavailable lead/model, finite budget, zero parallelism, or a pending/uncertain delivery), and **Ready**. The Steward is a deterministic projection of confirmed session metadata scoped to this project's Office team: refresh and replay rebuild the same records, nothing outside that scope is shown, and it never sends work or runs a model. No background action spends on its own — the message action only forwards the message you chose, and only when you invoke it. **Completed** only means the host reported completion; it guarantees no reply, artifact or verified result — verify with a local check.
 
 The model shown in Settings or the compact section is the **requested/effective** lead model; a model on an assistant message is the host's **observed route**, not a billing receipt. Parallelism counts active Office reservations for the current project, including pending or uncertain delivery; zero pauses dispatch. A reservation lasts from admission until the root and its descendants have terminal outcomes. Estimates are not spending. Null budget means no Office admission limit, blank inherits, and zero is a real limit. On OpenCode 2.3.2 a finite budget blocks delegation: the host cannot cap child routes or their cost. No setting is a provider billing cap. If delivery is uncertain, inspect the session before retrying.
 

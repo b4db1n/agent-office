@@ -13,7 +13,7 @@ export default {
     await ctx.command.transform((editor) => {
       editor.add({
         name: COMMAND,
-        description: 'Send a task to the selected Agent Office lead in a new root session',
+        description: 'Send a task to the selected Office Steward lead in a new root session',
         execute: async ({ sessionID, prompt }) => {
           const text = prompt.text?.trim();
           if (!text) throw new Error('Type /office followed by a task.');
@@ -28,12 +28,12 @@ export default {
           // into a prompt. A synthetic message with resume:false is recorded in the
           // transcript but is not scheduled for execution, so no model sees it.
           const lines = [
-            'Agent Office: task sent to a new root session.',
+            'Office Steward: task sent to a new root session.',
             `Session ID: ${result.sessionId}`,
           ];
           if (result.lead) lines.push(`Lead: ${result.lead}`);
           if (result.requestedLeadModel) lines.push(`Requested model: ${result.requestedLeadModel}`);
-          lines.push('Open it from the Agent Office panel or the session list.');
+          lines.push('Open it from the Office Steward panel or the session list.');
 
           await ctx.session.synthetic({
             sessionID,

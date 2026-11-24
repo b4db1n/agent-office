@@ -1,4 +1,4 @@
-# Agent Office OpenCode plugin (`/office`)
+# Office Steward OpenCode plugin (`/office`)
 
 The server-side OpenCode plugin behind `/office`. It runs inside OpenCode with the host's access. No Office account, hosted service or separate service process is required. The shipped file is `plugin/index.js`; it is the built bundle of `plugin/source.ts`, which imports nothing at runtime.
 
@@ -6,9 +6,9 @@ The server-side OpenCode plugin behind `/office`. It runs inside OpenCode with t
 
 Choose one of the two supported ways:
 
-**1. OpenChamber extension (automatic).** In OpenChamber open **Settings → Extensions**, add this repository and review/approve its permissions, then make sure **Agent Office** is enabled. OpenChamber lists this `plugin/` folder in the OpenCode config it manages while the extension is enabled, and OpenCode loads it within a couple of seconds. No manual file copy is needed. To see the team and open the new session, also enable **Agent Office** under **Work Status → Panel Sections**.
+**1. OpenChamber extension (automatic).** In OpenChamber open **Settings → Extensions**, add this repository and review/approve its permissions, then make sure **Office Steward** is enabled. OpenChamber lists this `plugin/` folder in the OpenCode config it manages while the extension is enabled, and OpenCode loads it within a couple of seconds. No manual file copy is needed. To see the team and open the new session, also enable **Office Steward** under **Work Status → Panel Sections**.
 
-**2. Project-local plugin (works without OpenChamber).** From the **target project** (not this checkout), set `OFFICE` to your Agent Office checkout and run:
+**2. Project-local plugin (works without OpenChamber).** From the **target project** (not this checkout), set `OFFICE` to your Office Steward checkout and run:
 
 ```sh
 node "$OFFICE/companion/setup.mjs" --apply --plugin
@@ -42,4 +42,4 @@ The delivery mode (`steer` / `queue`) is accepted, but the task always goes to t
 
 ## Does it open the UI?
 
-**No.** The plugin runs inside the OpenCode server and cannot switch the OpenChamber screen or the terminal UI to the new chat. It creates the root session and reports its ID so you can follow it yourself: open it from the **Agent Office** panel section, from the session list, or with OpenChamber's **openSession(id)**. The **Ask Office lead** message action is a separate OpenChamber feature; it also dispatches a root but is not this command.
+**No.** The plugin runs inside the OpenCode server and cannot switch the OpenChamber screen or the terminal UI to the new chat. It creates the root session and reports its ID so you can follow it yourself: open it from the **Office Steward** panel section, from the session list, or with OpenChamber's **openSession(id)**. The **Ask Office lead** message action is a separate OpenChamber feature; it also dispatches a root but is not this command.

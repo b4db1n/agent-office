@@ -401,7 +401,7 @@ test('packaged plugin registers once and emits a synthetic resume:false notice',
   assert.equal(out.synthetic.length, 1);
   assert.equal(out.synthetic[0].sessionID, 'ses_caller');
   assert.equal(out.synthetic[0].resume, false);
-  assert.match(out.synthetic[0].text, /Agent Office: task sent/);
+  assert.match(out.synthetic[0].text, /Office Steward: task sent/);
   assert.match(out.synthetic[0].text, /Lead: lead/);
   assert.match(out.synthetic[0].text, new RegExp(creates[0].data.id));
   assert.doesNotMatch(out.synthetic[0].text, /prompt/i);

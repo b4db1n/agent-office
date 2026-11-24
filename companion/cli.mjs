@@ -7,7 +7,7 @@ import { family, hostApi } from '../shared/family.mjs';
 import { officeError } from '../shared/host.mjs';
 import { usage } from '../shared/usage.mjs';
 
-const help = `Agent Office CLI (current project by default)
+const help = `Office Steward CLI (current project by default)
   inspect [directory]
   team <rootId> [directory]
   cost <rootId> [directory]

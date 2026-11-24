@@ -329,7 +329,7 @@ async function readState() {
       return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
     } catch (error) {
       if (error.code !== "ENOENT")
-        throw new Error("Agent Office could not read its saved settings. No changes were made.");
+        throw new Error("Office Steward could not read its saved settings. No changes were made.");
     }
   }
   return emptyState();
@@ -509,10 +509,10 @@ function selectLead(agents, selected) {
   }
   return { selected: null, available, nextAction: LEAD_NEXT_ACTION.CHOOSE_LEAD };
 }
-var OFFICE_REPO_URL = "https://github.com/b4db1n/agent-office";
+var OFFICE_REPO_URL = "https://github.com/b4db1n/office-steward";
 var PREVIEW_COMMAND = '(d="$HOME/.config/openchamber/extensions/agent-office"; test -f "$d/shared/family.mjs" && node "$d/companion/setup.mjs" --templates --plugin)';
 var SETUP_HELP = [
-  "Agent Office setup - preview by default; no project changes without --apply.",
+  "Office Steward setup - preview by default; no project changes without --apply.",
   "",
   "From the target project, preview with one command:",
   PREVIEW_COMMAND,
@@ -530,11 +530,11 @@ var SETUP_HELP = [
 ].join(`
 `);
 var SETUP_PROMPT = [
-  "Set up Agent Office in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.",
+  "Set up Office Steward in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.",
   "",
   "0. PREREQUISITES AND COMPANION",
   "   - Check that `node` and `opencode` (OpenCode 2) are on PATH. If either is missing, state that prerequisite and stop before any write.",
-  "   - Find the installed companion yourself: resolve `command -v agent-office`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.",
+  "   - Find the installed companion yourself: resolve `command -v office-steward`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.",
   `   - If missing, stop at the GitHub install link: ${OFFICE_REPO_URL}. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.`,
   "",
   "1. DISCOVERY (read only)",
@@ -980,21 +980,21 @@ var source_default = {
     await ctx.command.transform((editor) => {
       editor.add({
         name: COMMAND,
-        description: "Send a task to the selected Agent Office lead in a new root session",
+        description: "Send a task to the selected Office Steward lead in a new root session",
         execute: async ({ sessionID, prompt }) => {
           const text = prompt.text?.trim();
           if (!text)
             throw new Error("Type /office followed by a task.");
           const result = await dispatch(ctx.location.directory, text);
           const lines = [
-            "Agent Office: task sent to a new root session.",
+            "Office Steward: task sent to a new root session.",
             `Session ID: ${result.sessionId}`
           ];
           if (result.lead)
             lines.push(`Lead: ${result.lead}`);
           if (result.requestedLeadModel)
             lines.push(`Requested model: ${result.requestedLeadModel}`);
-          lines.push("Open it from the Agent Office panel or the session list.");
+          lines.push("Open it from the Office Steward panel or the session list.");
           await ctx.session.synthetic({
             sessionID,
             text: lines.join(`

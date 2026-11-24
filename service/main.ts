@@ -1,7 +1,10 @@
 import http from 'node:http';
 import { isAbsolute } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { inspect, saveSettings } from '../shared/settings.mjs';
-import { dispatch } from '../shared/dispatch.mjs';
+import { dispatch, admissionView } from '../shared/dispatch.mjs';
+import { usage } from '../shared/usage.mjs';
+import { officeError, runOpenCode } from '../shared/host.mjs';
 
 const port = Number(process.env.OPENCHAMBER_SERVICE_PORT);
 const token = process.env.OPENCHAMBER_SERVICE_TOKEN;
@@ -14,7 +17,7 @@ http.createServer(async (req, res) => {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
   if (req.headers.authorization !== `Bearer ${token}`) return void reply(401, {});
   if (req.method === 'GET' && req.url === '/health') return void reply(200, { ok: true });
-  if (req.method !== 'POST' || !['/inspect', '/settings', '/dispatch'].includes(req.url ?? '')) return void reply(404, {});
+  if (req.method !== 'POST' || !['/inspect', '/records', '/settings', '/dispatch', '/usage'].includes(req.url ?? '')) return void reply(404, {});
   try {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -24,15 +27,34 @@ http.createServer(async (req, res) => {
     }
     const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     if (typeof data?.directory !== 'string' || !isAbsolute(data.directory)) throw new Error('Select a project directory.');
-    if (req.url === '/inspect') return void reply(200, await inspect(data.directory));
+    if (req.url === '/inspect') return void reply(200, {...await inspect(data.directory),reservations:await admissionView(data.directory)});
+    if (req.url === '/records') return void reply(200, {reservations:await admissionView(data.directory)});
     if (req.url === '/settings') {
       if (!['project', 'global'].includes(data.scope)) throw new Error('Unknown settings scope.');
-      await saveSettings(data.directory, data.scope, data.values);
-      return void reply(200, await inspect(data.directory));
+      await saveSettings(data.directory, data.scope, data.values, data.unset);
+      return void reply(200, { ok: true });
+    }
+    if (req.url === '/usage') {
+      if (typeof data.rootId !== 'string' || !data.rootId || data.rootId.length > 200) throw new Error('Select a session to see its usage.');
+      const result = await usage(await realpath(data.directory), data.rootId, { run: runOpenCode });
+      // Usage and routing evidence only; never transcript content.
+      return void reply(200, {
+        counts: result.counts,
+        reported: result.reported,
+        estimated: result.estimated,
+        observed: result.observed,
+        status: result.status,
+      });
     }
     if (typeof data.prompt !== 'string' || !data.prompt.trim() || data.prompt.length > 32000) throw new Error('Choose a message of 1–32,000 characters.');
-    return void reply(200, await dispatch(data.directory, data.prompt));
+    const origin = typeof data.origin?.sessionId === 'string' && data.origin.sessionId.length < 200
+      ? {
+          sessionId: data.origin.sessionId,
+          ...(typeof data.origin.messageId === 'string' && data.origin.messageId.length < 200 ? { messageId: data.origin.messageId } : {}),
+        }
+      : undefined;
+    return void reply(200, await dispatch(data.directory, data.prompt, { run: runOpenCode, origin }));
   } catch (error) {
-    return void reply(400, { message: error instanceof Error ? error.message.slice(0, 300) : 'Request failed.' });
+    return void reply(400, { message: officeError(error) });
   }
 }).listen(port, '127.0.0.1');

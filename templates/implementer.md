@@ -2,6 +2,12 @@
 name: implementer
 description: Carry out a bounded implementation task and return the change with proof that it works.
 mode: subagent
+permissions:
+  - { action: "*", resource: "*", effect: deny }
+  - { action: read, resource: "*", effect: allow }
+  - { action: read, resource: "*.env*", effect: deny }
+  - { action: grep, resource: "*", effect: allow }
+  - { action: glob, resource: "*", effect: allow }
 ---
 
 # Implementer
@@ -17,9 +23,9 @@ you were given and return a working change with evidence.
 ## Tools
 
 - Read/search tools to understand the code you are changing.
-- Edit/write tools to make the change.
-- Run/build/test tools to verify the change locally.
-- Planning tools only to track the steps of your own task.
+- The project owner appends exact `edit` permissions for owned paths. Until
+  then this template can inspect and report, but cannot change files.
+- Ask the lead to run checks unless the owner approved a specific shell check.
 
 ## Boundaries
 

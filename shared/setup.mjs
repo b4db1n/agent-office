@@ -95,31 +95,66 @@ export function selectLead(agents, selected) {
   return { selected: null, available, nextAction: LEAD_NEXT_ACTION.CHOOSE_LEAD };
 }
 
+/** Public install source. The README deep link carries the same https URL. */
+export const OFFICE_REPO_URL = 'https://github.com/b4db1n/agent-office';
+
+/**
+ * One copyable terminal command for a preview, run from the target project.
+ * Uses $HOME (macOS and Linux), needs no placeholder the user must fill in and
+ * never pipes a remote download into a shell. An existing clone is reused.
+ */
+export const PREVIEW_COMMAND =
+  '(d="$HOME/.config/openchamber/extensions/agent-office"; test -f "$d/shared/family.mjs" && node "$d/companion/setup.mjs" --templates --plugin)';
+
+/** Companion help, mirrored verbatim in docs/GETTING-STARTED.md. */
+export const SETUP_HELP = [
+  'Agent Office setup - preview by default; no project changes without --apply.',
+  '',
+  'From the target project, preview with one command:',
+  PREVIEW_COMMAND,
+  '',
+  'Companion options (node <checkout>/companion/setup.mjs):',
+  '  (none)          Preview only: paths, observed lead, models, skipped files.',
+  '  --apply         Perform only the approved changes (exclusive create).',
+  '  --templates     Include the optional lead/implementer/reviewer definitions.',
+  '  --plugin        Include the optional project-local OpenCode plugin.',
+  '  --lead ID       Check a candidate lead; does not save your choice.',
+  '  --help, -h      Show this help.',
+  '',
+  'Prerequisites: Node.js and OpenCode 2 (`opencode` on PATH).',
+  `Install in OpenChamber from ${OFFICE_REPO_URL}; no local file selection is needed.`,
+].join('\n');
+
 /**
  * Prompt that drives an idempotent Agent Office setup: discovery, preview,
  * setup, smoke. Safe to paste into a fresh session that owns the project.
+ * It locates the companion itself and never asks the user to pick a file.
  */
 export const SETUP_PROMPT = [
-  'Set up Agent Office in this project. Use the installed Agent Office companion. If it is unavailable, explain how to install it before making changes.',
+  'Set up Agent Office in this project. Work from the current project directory. Do not ask me to choose a file or folder at any step.',
+  '',
+  '0. PREREQUISITES AND COMPANION',
+  '   - Check that `node` and `opencode` (OpenCode 2) are on PATH. If either is missing, state that prerequisite and stop before any write.',
+  '   - Find the installed companion yourself: resolve `command -v agent-office`, or check `~/.config/openchamber/extensions/agent-office` and `~/.local/share/agent-office/checkout` for `companion/setup.mjs`. Verify the package name and Git origin. Do not search unrelated project folders.',
+  `   - If missing, stop at the GitHub install link: ${OFFICE_REPO_URL}. Do not clone or install on my behalf. If only the old companion without shared/family.mjs is present, stop: its inspect may create a chat.`,
   '',
   '1. DISCOVERY (read only)',
-  '   - Inspect the live OpenCode agent and model lists in this directory. Show the current Office settings and their sources.',
-  '   - Identify a lead candidate (a visible, top-level-capable agent) plus optional implementer and reviewer agents.',
-  '   - If no lead is selected or its ID is missing, offer an available primary agent or preview an optional starter lead. Do not silently substitute one.',
-  '   - Record what already exists so you do not duplicate it.',
+  '   - Run the companion CLI `inspect` from this directory. If OpenCode has not loaded the project, tell me how to retry without creating a disposable chat.',
+  '   - Record the exact lead id and candidate ids with their mode and hidden flags, the exact model ids from the host catalog, and the current Office settings with their sources. Quote ids as reported; never rename or substitute one.',
+  '   - Inspect existing project definitions and plugin paths and report what already exists, so nothing is duplicated or overwritten.',
+  '   - If no lead is selected or its id is missing/hidden, list the observed candidates and ask me to pick one, or offer to preview a starter lead. Never silently substitute another agent.',
   '',
   '2. PREVIEW (no writes)',
-  '   - Run the installer in preview mode. Show exact paths, skipped existing definitions, the proposed lead, and lower-cost specialist models from the host catalog.',
-  '   - Ask the user to select the lead and specialist model, or explicitly keep the host default.',
-  '   - Wait for confirmation before writing anything.',
+  '   - Run the companion setup with `--templates --plugin` and without `--apply`. Show exact target paths, skipped existing definitions, the observed lead id, and the observed lower-cost specialist model ids from the catalog.',
+  '   - Ask me to confirm the lead and specialist model, or to explicitly keep the host default. Stop here until I approve the complete set of changes. No file may be written before that approval.',
   '',
-  '3. SETUP (idempotent)',
-  '   - Apply only the approved project settings and missing optional templates. Never overwrite an existing definition or change global defaults.',
-  '   - Preview a second time and verify existing files are unchanged.',
-  '   - Persist the lead id exactly as validated. Re-running must produce the same result with no duplicates.',
+  '3. SETUP (only after complete approval, idempotent)',
+  '   - Apply only the approved project settings and missing optional files. Include the optional templates and/or project-local plugin only if I approved those pieces.',
+  '   - Use exclusive create: never overwrite an existing definition, never replace a host-provided agent, never change global defaults.',
+  '   - Preview again and verify existing definitions are unchanged and no duplicates were added. Persist the lead id exactly as validated. Re-running must produce the same result.',
   '',
-  '4. SMOKE (verify)',
-  '   - Dispatch one small agreed task through Agent Office using the selected lead and a real specialist. Have the lead verify the resulting file or check.',
-  '   - Inspect the team under that root. Report the actual parent/child relationship, observed models, and verification result; distinguish missing evidence from success.',
+  '4. SMOKE (safe, no paid models)',
+  '   - Dispatch one small agreed task only with model ids I have confirmed are free for this session. If no free model is confirmed, skip the smoke and say why; never run a model of unknown or paid cost.',
+  '   - Have the lead verify the result with a local check (a new file or an assertion). Inspect the team under that root and report the actual parent/child relationship, the observed lead and models, and the verification result. Distinguish missing evidence from success.',
   '   - Report the files touched and the checks run. Do not commit unless explicitly asked.',
 ].join('\n');

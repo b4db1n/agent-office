@@ -11,11 +11,30 @@ import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { issueExample } from '../shared/contribution.mjs';
 
+// Resolve an already-installed Playwright: an explicit module path, a local
+// copy, or the conventional global npm roots. No installs or subprocesses.
+function moduleUrl(specifier) {
+  return path.isAbsolute(specifier) || specifier.startsWith('.')
+    ? pathToFileURL(specifier).href
+    : specifier;
+}
+const globalRoots = [
+  path.join(os.homedir(), '.npm-global', 'lib', 'node_modules'),
+  path.join(os.homedir(), '.npm', 'lib', 'node_modules'),
+  '/usr/local/lib/node_modules',
+  '/usr/lib/node_modules',
+];
+const playwrightCandidates = [
+  process.env.PLAYWRIGHT_MODULE,
+  'playwright',
+  ...globalRoots.map(root => path.join(root, 'playwright', 'index.mjs')),
+  ...globalRoots.map(root => path.join(root, 'playwright')),
+];
 let chromium = null;
-for (const candidate of [process.env.PLAYWRIGHT_MODULE, 'playwright'].filter(Boolean)) {
+for (const candidate of playwrightCandidates.filter(Boolean)) {
   try {
-    ({ chromium } = await import(candidate));
-    break;
+    const loaded = await import(moduleUrl(candidate));
+    if (loaded?.chromium) { chromium = loaded.chromium; break; }
   } catch {}
 }
 const browserTest = (name, fn) => test(name, { skip: chromium ? false : 'Playwright is not installed.' }, fn);
@@ -26,6 +45,25 @@ const PROJECTS = [
   { id: 'p-a', directory: DIR_A, title: 'Project A' },
   { id: 'p-b', directory: DIR_B, title: 'Project B' },
 ];
+
+// A genuinely configured, discovery-complete project. The default inspect
+// fixture below intentionally omits these fields; use this one for dashboard
+// (Work Status) regressions that depend on the steward lifecycle.
+const READY_INSPECT = {
+  agents: [
+    { id: 'lead', mode: 'primary', model: { providerID: 'opencode-go', id: 'beam-free' } },
+    { id: 'helper', mode: 'primary' },
+  ],
+  models: ['opencode-go/beam-free', 'opencode-go/glm-5-free'],
+  variants: {},
+  settings: { lead: 'lead', leadModel: 'opencode-go/beam-free', specialistModel: 'opencode-go/glm-5-free' },
+  sources: { lead: 'project', leadModel: 'project', specialistModel: 'project' },
+  project: { lead: 'lead' }, global: { lead: null }, plugin: true,
+  agentDiscovery: 'ready', modelDiscovery: 'ready',
+  hostModel: { providerID: 'opencode-go', id: 'beam-free' },
+  reservations: [{ rootId: 'root-1', phase: 'finished', estimatedLeadCost: null }],
+};
+const READY_COVERAGE = [{ directory: DIR_A, state: 'ready' }];
 
 function session(id, parentId, opts = {}) {
   return {
@@ -54,6 +92,7 @@ function hostScript(opts = {}) {
     settings: { lead: 'lead', leadModel: 'opencode-go/beam-free', specialistModel: 'opencode-go/glm-5-free' },
     sources: { lead: 'project', leadModel: 'project', specialistModel: 'project' },
     project: { lead: 'lead' }, global: { lead: null }, plugin: true,
+    reservations: ['root-1', 'root-2', 'root-a', 'root-b'].map(rootId => ({ rootId, phase: 'finished', estimatedLeadCost: null })),
   };
   return `
     const frame = document.getElementById('frame');
@@ -69,6 +108,14 @@ function hostScript(opts = {}) {
     window.__storage = store;
     window.__delay = ${delay};
     window.__inspect = ${JSON.stringify(inspect)};
+    window.__coverage = ${JSON.stringify(opts.coverage ?? [
+      { directory: DIR_A, state: 'ready' },
+      { directory: DIR_B, state: 'ready' },
+    ])};
+    window.__dispatchReplies = ${JSON.stringify(opts.dispatchReplies ?? [])};
+    window.__holdDispatch = ${opts.holdDispatch === true};
+    window.__heldDispatch = [];
+    window.__failPaths = ${JSON.stringify(opts.failPaths ?? [])};
     window.__serviceRequests = [];
     window.__urls = [];
     window.__clipboard = [];
@@ -78,8 +125,13 @@ function hostScript(opts = {}) {
       if (payload !== undefined) msg.payload = payload;
       setTimeout(() => win().postMessage(msg, '*'), 5);
     }
+    window.__releaseDispatch = () => {
+      const held = window.__heldDispatch.splice(0);
+      for (const item of held) reply(item.m, { status: 200, body: JSON.stringify(item.accepted) });
+      return held.length;
+    };
     function snapshotFor(projectId) {
-      return { kind: 'sessions', state: 'ready', sessions: (window.__sessionsByProject[projectId] || []) };
+      return { kind: 'sessions', state: 'ready', projectId, coverage: window.__coverage, sessions: (window.__sessionsByProject[projectId] || []) };
     }
     window.__push = (subId, snap) => {
       win().postMessage({ channel: 'openchamber.sdk', v: 1, type: 'workspace', payload: { subscriptionId: subId, snapshot: snap } }, '*');
@@ -157,6 +209,16 @@ function hostScript(opts = {}) {
         let body = {};
         try { body = p.body ? JSON.parse(p.body) : {}; } catch { body = {}; }
         window.__serviceRequests.push({ method: p.method, path: p.path, body });
+        if (window.__failPaths.includes(p.path)) {
+          reply(m, { status: 503, body: JSON.stringify({ ok: false, code: 'SERVICE_FAILED', message: 'Injected service failure.' }) });
+          return;
+        }
+        if (p.path === '/dispatch') {
+          const accepted = window.__dispatchReplies.shift() ?? { sessionId: 'dispatched-1', directory: window.__directory };
+          if (window.__holdDispatch) { window.__heldDispatch.push({ m, accepted }); return; }
+          reply(m, { status: 200, body: JSON.stringify(accepted) });
+          return;
+        }
         reply(m, { status: 200, body: JSON.stringify(window.__inspect) });
         return;
       }
@@ -178,15 +240,16 @@ function hostScript(opts = {}) {
 async function start(opts = {}) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
-  const html = `<!doctype html><html><body>
-    <iframe id="frame" src="${PANEL_URL}" style="width:900px;height:700px"></iframe>
+  if (opts.viewport) await page.setViewportSize(opts.viewport);
+  const html = `<!doctype html><html><body style="margin:0">
+    <iframe id="frame" src="${PANEL_URL}" style="width:100%;height:100vh;border:0"></iframe>
     <script>${hostScript(opts)}</script>
   </body></html>`;
   const file = path.join(os.tmpdir(), `office-panel-${Date.now()}-${Math.random().toString(36).slice(2)}.html`);
   fs.writeFileSync(file, html);
   await page.goto('file://' + file);
   const frame = page.frame({ url: /panel\/index\.html/ });
-  const readySelector = opts.surface === 'status' ? '.ao-checklist' : '#talk-draft';
+  const readySelector = opts.surface === 'status' ? '.ao-status' : '#talk-draft';
   await frame.locator(readySelector).waitFor({ timeout: 5000 });
   return { browser, page, frame };
 }
@@ -216,7 +279,7 @@ async function sendDirectory(page, directory) {
   }, directory);
 }
 
-browserTest('selected root state shows its own team and reply state', async () => {
+browserTest('selected root shows its own team with truthful activity labels', async () => {
   const sessions = [
     session('root-1', null, { title: 'Root task', outcome: 'completed' }),
     session('child', 'root-1', { title: 'Child task' }),
@@ -227,12 +290,16 @@ browserTest('selected root state shows its own team and reply state', async () =
   const { browser, frame } = await start({ sessions, readySession: { id: 'root-1', title: 'Root One', busy: false } });
 
   try {
+  // #talk-draft renders before inspect/snapshot hydrate the confirmed family.
+  await frame.locator('#agent-root-1').waitFor({ timeout: 5000 });
   assert.equal(await subTitle(frame), 'Root One');
   assert.deepEqual((await visibleIds(frame)).sort(), ['child', 'grandchild', 'root-1']);
   const rootCard = await cards(frame).then(all => all.find(c => c.id === 'agent-root-1'));
-  assert.match(rootCard.text, /Reply ready/);
+  assert.match(rootCard.text, /Completed · result not verified/);
+  assert.doesNotMatch(rootCard.text, /Reply ready/);
   const grandCard = await cards(frame).then(all => all.find(c => c.id === 'agent-grandchild'));
-  assert.match(grandCard.text, /Reply ready/);
+  assert.match(grandCard.text, /Idle · unread activity/);
+  assert.doesNotMatch(grandCard.text, /Reply ready/);
   } finally { await browser.close(); }
 });
 
@@ -249,7 +316,8 @@ browserTest('same-project root switch hydrates delayed snapshot without stale ca
   await sendSession(page, 'child', 'Child Root');
   await frame.locator('#agent-child').waitFor({ timeout: 5000 });
   assert.equal(await subTitle(frame), 'Child Root');
-  assert.deepEqual((await visibleIds(frame)).sort(), ['child', 'grandchild']);
+  // A descendant sees its whole confirmed Office family, not just its subtree.
+  assert.deepEqual((await visibleIds(frame)).sort(), ['child', 'grandchild', 'root-1']);
   // A stale workspace push for an old/unknown subscription must not repaint the team.
   // Push a stale workspace snapshot with an unknown subscription id.
   await page.evaluate(() => {
@@ -262,7 +330,7 @@ browserTest('same-project root switch hydrates delayed snapshot without stale ca
     });
   });
   await page.waitForTimeout(100);
-  assert.deepEqual((await visibleIds(frame)).sort(), ['child', 'grandchild']);
+  assert.deepEqual((await visibleIds(frame)).sort(), ['child', 'grandchild', 'root-1']);
   assert.equal(await subTitle(frame), 'Child Root');
   } finally { await browser.close(); }
 });
@@ -318,7 +386,7 @@ browserTest('Talk opens the exact root and never sends a message', async () => {
   } finally { await browser.close(); }
 });
 
-browserTest('idle without unread is Idle; completed or unread is Reply ready', async () => {
+browserTest('activity labels are truthful: Idle, Completed, unread (no inferred reply)', async () => {
   const sessions = [
     session('root-1', null, { activity: 'idle', outcome: null, unread: false }),
     session('done', 'root-1', { activity: 'idle', outcome: 'completed', unread: false }),
@@ -330,9 +398,9 @@ browserTest('idle without unread is Idle; completed or unread is Reply ready', a
   await frame.locator('#agent-unread').waitFor({ timeout: 5000 });
   const byId = new Map((await cards(frame)).map(c => [c.id, c.text]));
   assert.match(byId.get('agent-root-1'), /Idle/);
-  assert.doesNotMatch(byId.get('agent-root-1'), /Reply ready/);
-  assert.match(byId.get('agent-done'), /Reply ready/);
-  assert.match(byId.get('agent-unread'), /Reply ready/);
+  assert.match(byId.get('agent-done'), /Completed · result not verified/);
+  assert.match(byId.get('agent-unread'), /Idle · unread activity/);
+  for (const text of byId.values()) assert.doesNotMatch(text, /Reply ready/);
   } finally { await browser.close(); }
 });
 
@@ -370,22 +438,255 @@ browserTest('focus and DOM stay stable; drafts are per root and persist', async 
   } finally { await browser.close(); }
 });
 
-browserTest('Work Status surface renders the setup checklist and actions', async () => {
-  const { browser, page, frame } = await start({ surface: 'status', sessions: [session('root-1', null, { outcome: 'completed' })] });
+browserTest('configured Work Status is a compact dashboard with an actionable entry point', async () => {
+  const sessions = [
+    session('root-1', null, { title: 'Root One', outcome: 'completed' }),
+    session('child', 'root-1', { title: 'Child', activity: 'running' }),
+  ];
+  const { browser, frame } = await start({ surface: 'status', sessions, inspect: READY_INSPECT, coverage: READY_COVERAGE });
   try {
-    await frame.getByText('Session access: Live updates connected.').waitFor({ timeout: 5000 });
-    const checklist = await frame.locator('.ao-checklist').innerText();
-    assert.match(checklist, /Project: Current project selected\./);
-    assert.match(checklist, /Local service: OpenCode answered\./);
-    assert.match(checklist, /Lead: lead/);
-    assert.match(checklist, /Models: 2 available\./);
-    assert.match(checklist, /Chat command: \/office is available\./);
-    assert.equal(await frame.locator('button[data-action="copySetup"]').count(), 1);
-    assert.equal(await frame.locator('button[data-view="settings"]').count(), 1);
+    const status = frame.locator('.ao-status');
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    const text = await status.innerText();
+    assert.match(text, /Agent Office · Ready/);
+    assert.match(text, /Lead: lead/);
+    assert.match(text, /opencode-go\/beam-free \(project\)/);
+    assert.match(text, /Office Steward/);
+    assert.match(text, /root-1 · Completed · result not verified/);
+    assert.match(text, /child · Running/);
+    assert.doesNotMatch(text, /Setup required/);
+    assert.doesNotMatch(text, /Copy setup prompt/);
+    assert.equal(await frame.locator('button[data-action="askOffice"]').count(), 1);
     assert.equal(await frame.locator('button[data-view="office"]').count(), 1);
-    await frame.locator('button[data-action="copySetup"]').click();
-    await page.waitForTimeout(100);
-    assert.equal((await page.evaluate(() => window.__clipboard)).length, 1);
+    assert.equal(await frame.locator('button[data-view="settings"]').count(), 1);
+    assert.equal(await frame.locator('button[data-action="refresh"]').count(), 1);
+    // The primary action opens a composer; Escape keeps the user on the dashboard.
+    await frame.locator('[data-action="askOffice"]').click();
+    await frame.locator('#office-task').waitFor({ timeout: 5000 });
+    assert.equal(await frame.locator('button[data-action="askOffice"]').count(), 0);
+    await frame.locator('#office-task').press('Escape');
+    await frame.locator('button[data-action="askOffice"]').waitFor({ timeout: 5000 });
+  } finally { await browser.close(); }
+});
+
+browserTest('Work Status shows onboarding, not a configured dashboard, when setup is required', async () => {
+  const inspect = { ...READY_INSPECT, settings: {}, sources: {}, reservations: [] };
+  const { browser, frame } = await start({ surface: 'status', inspect, coverage: READY_COVERAGE, sessions: [session('root-1', null)] });
+  try {
+    const status = frame.locator('.ao-status');
+    await frame.getByText('Agent Office · Setup required').waitFor({ timeout: 5000 });
+    const text = await status.innerText();
+    assert.match(text, /Agent Office · Setup required/);
+    assert.match(text, /Preview the available agents and choose a lead\./);
+    assert.match(text, /Copy setup prompt/);
+    assert.doesNotMatch(text, /Lead: lead/);
+    assert.doesNotMatch(text, /Office Steward/);
+    assert.equal(await frame.locator('button[data-action="copySetup"]').count(), 1);
+    assert.equal(await frame.locator('button[data-action="askOffice"]').count(), 0);
+  } finally { await browser.close(); }
+});
+
+browserTest('Work Status names degraded and attention states with recovery controls', async () => {
+  const sessions = [session('root-1', null), session('child', 'root-1')];
+  const degraded = await start({ surface: 'status', sessions, inspect: READY_INSPECT, coverage: [] });
+  try {
+    await degraded.frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
+    const text = await degraded.frame.locator('.ao-status').innerText();
+    assert.match(text, /Agent Office · Degraded/);
+    assert.match(text, /Live session coverage is unavailable/);
+    assert.equal(await degraded.frame.locator('button[data-action="refresh"]').count(), 1);
+    assert.equal(await degraded.frame.locator('button[data-view="settings"]').count(), 1);
+  } finally { await degraded.browser.close(); }
+
+  const waiting = [session('root-1', null, { activity: 'waiting-question' }), session('child', 'root-1')];
+  const attention = await start({ surface: 'status', sessions: waiting, inspect: READY_INSPECT, coverage: READY_COVERAGE });
+  try {
+    await attention.frame.getByText('Agent Office · Needs attention').waitFor({ timeout: 5000 });
+    const text = await attention.frame.locator('.ao-status').innerText();
+    assert.match(text, /Agent Office · Needs attention/);
+    assert.match(text, /Open the highlighted session to inspect its status\./);
+    assert.match(text, /root-1 · Waiting for an answer/);
+  } finally { await attention.browser.close(); }
+});
+
+browserTest('unsaved settings show a preview instead of a dispatch entry point', async () => {
+  const { browser, frame } = await start({ surface: 'status', sessions: [session('root-1', null)], inspect: READY_INSPECT, coverage: READY_COVERAGE });
+  try {
+    await frame.locator('button[data-view="settings"]').click();
+    await frame.locator('#setting-language').waitFor({ timeout: 5000 });
+    await frame.locator('#setting-language').fill('tr');
+    await frame.getByText('Back to Work Status').click();
+    await frame.getByText('Setup preview pending').waitFor({ timeout: 5000 });
+    const text = await frame.locator('.ao-status').innerText();
+    assert.match(text, /Setup preview pending/);
+    assert.match(text, /Review your unsaved changes in Settings\./);
+    assert.equal(await frame.locator('button[data-action="askOffice"]').count(), 0);
+  } finally { await browser.close(); }
+});
+
+browserTest('descendant chat: Work Status and Open Office show the same Office family ids', async () => {
+  const sessions = [
+    session('root-1', null, { title: 'Root', outcome: 'completed' }),
+    session('child', 'root-1', { title: 'Child' }),
+    session('grandchild', 'child', { title: 'Grandchild', activity: 'running' }),
+    session('outside', null, { title: 'Unrelated chat' }),
+    session('outside-child', 'outside', { title: 'Unrelated child' }),
+  ];
+  const { browser, frame } = await start({
+    surface: 'status', sessions,
+    readySession: { id: 'child', title: 'Child', busy: false },
+    inspect: READY_INSPECT, coverage: READY_COVERAGE,
+  });
+  try {
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    const statusIds = await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort());
+    assert.deepEqual(statusIds, ['child', 'grandchild', 'root-1']);
+    assert.deepEqual(await frame.locator('[data-record][data-current="true"]').evaluateAll(els => els.map(e => e.dataset.record)), ['child']);
+
+    await frame.locator('button[data-view="office"]').click();
+    await frame.locator('.ao-agent').first().waitFor({ timeout: 5000 });
+    const panelIds = await frame.locator('[data-session]').evaluateAll(els => els.map(e => e.dataset.session).sort());
+    assert.deepEqual(panelIds, statusIds);
+    assert.deepEqual(await frame.locator('.ao-agent[data-current="true"]').evaluateAll(els => els.map(e => e.dataset.session)), ['child']);
+  } finally { await browser.close(); }
+});
+
+browserTest('unrelated chat: both views exclude its subtree and show only confirmed Office work', async () => {
+  const sessions = [
+    session('root-1', null, { title: 'Root' }),
+    session('child', 'root-1', { title: 'Child' }),
+    session('outside', null, { title: 'Unrelated chat' }),
+    session('outside-child', 'outside', { title: 'Unrelated child' }),
+  ];
+  const { browser, frame } = await start({
+    surface: 'status', sessions,
+    readySession: { id: 'outside', title: 'Unrelated chat', busy: false },
+    inspect: READY_INSPECT, coverage: READY_COVERAGE,
+  });
+  try {
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    const statusIds = await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort());
+    assert.deepEqual(statusIds, ['child', 'root-1']);
+    assert.equal(await frame.locator('[data-current="true"]').count(), 0);
+
+    await frame.locator('button[data-view="office"]').click();
+    await frame.locator('.ao-agent').first().waitFor({ timeout: 5000 });
+    const panelIds = await frame.locator('[data-session]').evaluateAll(els => els.map(e => e.dataset.session).sort());
+    assert.deepEqual(panelIds, statusIds);
+    assert.equal(await frame.locator('.ao-agent[data-current="true"]').count(), 0);
+  } finally { await browser.close(); }
+});
+
+browserTest('missing project id or unready coverage blocks Ready and leaks no records', async () => {
+  const sessions = [session('root-1', null), session('child', 'root-1')];
+  const { browser, page, frame } = await start({
+    surface: 'status', sessions, inspect: READY_INSPECT, coverage: READY_COVERAGE,
+  });
+  try {
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    const subId = await page.evaluate(() => window.__subs.find(s => s.kind === 'sessions')?.id);
+    const push = (snap) => page.evaluate(({ subId, snap }) => window.__push(subId, snap), { subId, snap });
+
+    // No projectId at all: degrade, do not fall back to the project's teams.
+    await push({ kind: 'sessions', state: 'ready', sessions });
+    await frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
+    assert.equal(await frame.locator('[data-record]').count(), 0);
+
+    // Recovery restores exactly the confirmed family; nothing stale leaks.
+    await push({ kind: 'sessions', state: 'ready', projectId: 'p-a', coverage: READY_COVERAGE, sessions });
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    assert.deepEqual(await frame.locator('[data-record]').evaluateAll(els => els.map(e => e.dataset.record).sort()), ['child', 'root-1']);
+
+    // Coverage that exists but is not ready must also block Ready and records.
+    await push({ kind: 'sessions', state: 'ready', projectId: 'p-a', coverage: [{ directory: DIR_A, state: 'loading' }], sessions });
+    await frame.waitForFunction(() => document.querySelector('.ao-status')?.innerText.includes('Live session coverage is unavailable'));
+    assert.equal(await frame.locator('[data-record]').count(), 0);
+    await frame.locator('button[data-view="office"]').click();
+    assert.equal(await frame.locator('.ao-agent').count(), 0);
+  } finally { await browser.close(); }
+});
+
+browserTest('dashboard fits 390x844 and 1280x800 without horizontal overflow', async () => {
+  for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 800 }]) {
+    const { browser, frame } = await start({
+      surface: 'status', viewport,
+      sessions: [session('root-1', null), session('child', 'root-1')],
+      inspect: READY_INSPECT, coverage: READY_COVERAGE,
+    });
+    try {
+      await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+      const noOverflow = () => frame.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
+      assert.equal(await noOverflow(), true, `status overflow at ${viewport.width}`);
+      assert.equal(await frame.locator('button[data-view="office"]').isVisible(), true);
+      await frame.locator('button[data-view="office"]').click();
+      await frame.locator('.ao-agent').first().waitFor({ timeout: 5000 });
+      assert.equal(await noOverflow(), true, `office overflow at ${viewport.width}`);
+      assert.equal(await frame.locator('#talk-draft').isVisible(), true);
+    } finally { await browser.close(); }
+  }
+});
+
+browserTest('held dispatch: duplicate attempts send once, navigate once, and Escape restores focus', async () => {
+  const { browser, page, frame } = await start({
+    surface: 'status', sessions: [session('root-1', null, { outcome: 'completed' })],
+    inspect: READY_INSPECT, coverage: READY_COVERAGE,
+    holdDispatch: true,
+    dispatchReplies: [{ sessionId: 'dispatched-1', directory: DIR_A }],
+  });
+  try {
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    await frame.locator('[data-action="askOffice"]').click();
+    await frame.locator('#office-task').waitFor({ timeout: 5000 });
+    assert.equal(await frame.evaluate(() => document.activeElement?.id), 'office-task');
+    await frame.locator('#office-task').fill('A small agreed task.');
+
+    await frame.locator('[data-action="submitTask"]').click();
+    // The synthetic reply is held: the first request is provably in flight.
+    await page.waitForFunction(() => window.__heldDispatch.length === 1);
+    assert.equal(await frame.locator('[data-action="submitTask"]').isDisabled(), true);
+    assert.equal(await page.evaluate(() => window.__serviceRequests.filter(r => r.path === '/dispatch').length), 1);
+    assert.equal(await page.evaluate(() => window.__opened.length), 0);
+
+    // A second attempt reaches the real delegated handler while the first is held.
+    const reached = await frame.evaluate(() => {
+      const button = document.querySelector('[data-action="submitTask"]');
+      if (!button) throw new Error('Submit button disappeared while held.');
+      let reachedRoot = false;
+      document.getElementById('root').addEventListener('click', () => { reachedRoot = true; }, { once: true, capture: true });
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      return reachedRoot;
+    });
+    assert.equal(reached, true, 'second attempt must reach the real click handler');
+    assert.equal(await page.evaluate(() => window.__serviceRequests.filter(r => r.path === '/dispatch').length), 1);
+    assert.equal(await page.evaluate(() => window.__heldDispatch.length), 1);
+    assert.equal(await page.evaluate(() => window.__opened.length), 0);
+
+    // Release the one held reply: exactly one navigation follows.
+    assert.equal(await page.evaluate(() => window.__releaseDispatch()), 1);
+    await page.waitForFunction(() => window.__opened.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__opened), ['dispatched-1']);
+    assert.equal(await page.evaluate(() => window.__serviceRequests.filter(r => r.path === '/dispatch').length), 1);
+
+    await frame.locator('[data-action="askOffice"]').click();
+    await frame.locator('#office-task').press('Escape');
+    await frame.locator('[data-action="askOffice"]').waitFor({ timeout: 5000 });
+    assert.equal(await frame.evaluate(() => document.activeElement?.dataset?.action), 'askOffice');
+  } finally { await browser.close(); }
+});
+
+browserTest('refresh failure degrades honestly and recovers when the service answers', async () => {
+  const { browser, page, frame } = await start({
+    surface: 'status', sessions: [session('root-1', null)],
+    inspect: READY_INSPECT, coverage: READY_COVERAGE,
+    failPaths: ['/inspect'],
+  });
+  try {
+    await frame.getByText('Agent Office · Degraded').waitFor({ timeout: 5000 });
+    assert.match(await frame.locator('.ao-status').innerText(), /The Agent Office service stopped\. Try again\./);
+    await page.evaluate(() => { window.__failPaths.length = 0; });
+    await frame.locator('button[data-action="refresh"]').click();
+    await frame.getByText('Agent Office · Ready').waitFor({ timeout: 5000 });
+    assert.equal(await frame.locator('[data-record]').count(), 1);
   } finally { await browser.close(); }
 });
 
@@ -433,24 +734,24 @@ browserTest('Contribute cancel emits no URL and restores the synthetic example',
   } finally { await browser.close(); }
 });
 
-browserTest('status and panel hide views that do not apply', async () => {
-  const status = await start({ surface: 'status', sessions: [session('root-1', null)] });
+browserTest('status and panel keep only the views that apply', async () => {
+  const status = await start({ surface: 'status', sessions: [session('root-1', null)], inspect: READY_INSPECT, coverage: READY_COVERAGE });
   try {
-    await status.frame.locator('.ao-checklist').waitFor({ timeout: 5000 });
+    await status.frame.locator('.ao-status').waitFor({ timeout: 5000 });
     assert.equal(await status.frame.locator('.ao-tabs').count(), 0);
     assert.equal(await status.frame.locator('#talk-draft').count(), 0);
     await status.frame.locator('button[data-view="settings"]').click();
     await status.frame.locator('#setting-lead').waitFor({ timeout: 5000 });
-    assert.equal(await status.frame.locator('.ao-checklist').count(), 0);
+    assert.equal(await status.frame.locator('.ao-status').count(), 0);
     assert.equal(await status.frame.getByText('Back to Work Status').count(), 1);
     await status.frame.getByText('Back to Work Status').click();
-    assert.equal(await status.frame.locator('.ao-checklist').count(), 1);
+    assert.equal(await status.frame.locator('.ao-status').count(), 1);
   } finally { await status.browser.close(); }
 
   const panel = await start({ sessions: [session('root-1', null)] });
   try {
     await panel.frame.locator('#talk-draft').waitFor({ timeout: 5000 });
-    assert.equal(await panel.frame.locator('.ao-checklist').count(), 0);
+    assert.equal(await panel.frame.locator('.ao-status').count(), 0);
     assert.equal(await panel.frame.getByText('Back to Work Status').count(), 0);
     assert.equal(await panel.frame.locator('.ao-tabs').count(), 1);
   } finally { await panel.browser.close(); }

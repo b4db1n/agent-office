@@ -57,7 +57,7 @@
     .ao-agent[data-tone="waiting"] { border-left-color: var(--oc-warning); }
     .ao-agent[data-tone="running"] { border-left-color: var(--oc-info); }
     .ao-agent[data-tone="failed"] { border-left-color: var(--oc-error); }
-    .ao-agent[data-tone="ready"] { border-left-color: var(--oc-success); }
+    .ao-agent[data-tone="completed"] { border-left-color: var(--oc-success); }
     .ao-agent:hover { background: var(--oc-hover); }
     .ao-agent:focus-visible { outline: 2px solid var(--oc-focus); outline-offset: 2px; }
     .ao-agent-name { font-size: 12px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -65,7 +65,7 @@
     .ao-agent[data-tone="waiting"] .ao-agent-state { color: var(--oc-warning-text); }
     .ao-agent[data-tone="running"] .ao-agent-state { color: var(--oc-info-text); }
     .ao-agent[data-tone="failed"] .ao-agent-state { color: var(--oc-error-text); }
-    .ao-agent[data-tone="ready"] .ao-agent-state { color: var(--oc-success-text); }
+    .ao-agent[data-tone="completed"] .ao-agent-state { color: var(--oc-success-text); }
     .ao-agent-detail { font-size: 10.5px; color: var(--oc-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     .ao-card { border: 1px solid var(--oc-border); background: var(--oc-elevated); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -103,6 +103,9 @@
     .ao-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
     .ao-table th, .ao-table td { border-bottom: 1px solid var(--oc-border); padding: 4px 6px; text-align: left; vertical-align: top; }
     .ao-muted { color: var(--oc-muted); }
+    .ao-status, .ao-card { min-width: 0; overflow-wrap: anywhere; }
+    .ao-status p { margin: 0; }
+    .ao-status button { width: fit-content; max-width: 100%; }
     html[data-oc-surface="status"] .ao-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
     .ao-grid { padding: 16px 10px 12px; border-radius: 12px; background: repeating-linear-gradient(0deg,transparent 0 15px,#795d4015 15px 17px), linear-gradient(#afc7d329 28%,#b8986c40 28%); }
     .ao-avatar { position:relative; display:grid; place-items:center; align-self:center; width:34px; height:26px; margin:3px 0 19px; font:bold 10px monospace; color:#162936; background:#b8dbe7; border:3px solid #364854; border-radius:7px; box-shadow:0 12px 0 -3px #47748c; }

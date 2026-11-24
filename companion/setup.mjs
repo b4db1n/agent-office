@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, copyFile, lstat, mkdir, realpath } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { selectLead } from '../shared/setup.mjs';
+import { PREVIEW_COMMAND, SETUP_HELP, selectLead } from '../shared/setup.mjs';
 import { inspect } from '../shared/settings.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -45,15 +45,16 @@ async function assertNoSymlinkEscape(cwd, targetPath) {
 }
 
 const SMOKE_GUIDANCE = [
-  'Preview: node companion/setup.mjs',
-  'Apply templates: node companion/setup.mjs --apply --templates',
-  'Apply plugin: node companion/setup.mjs --apply --plugin',
-  'Re-run either command to confirm no overwrites and no duplicates.',
+  `Preview: ${PREVIEW_COMMAND}`,
+  'Apply approved templates: append --apply --templates',
+  'Apply approved plugin: append --apply --plugin',
+  'Re-run the preview to confirm no overwrites and no duplicates.',
 ];
 
 export async function install(directory, args = [], agents = [], selectedLead = null, options = {}) {
   const argList = Array.isArray(args) ? args : [String(args)];
   const flags = [];
+  let help = false;
   let leadId = selectedLead;
   let opts = options || {};
   if (leadId && typeof leadId === 'object') {
@@ -63,13 +64,19 @@ export async function install(directory, args = [], agents = [], selectedLead = 
   for (let i = 0; i < argList.length; i++) {
     const a = argList[i];
     if (a === '--apply' || a === '--templates' || a === '--plugin') flags.push(a);
+    else if (a === '--help' || a === '-h') help = true;
     else if (a === '--lead') leadId = argList[++i] ?? null;
     else if (a.startsWith('--lead=')) leadId = a.slice('--lead='.length);
     else throw new Error('Unknown setup option.');
   }
+  if (help) return { mode: 'help', help: SETUP_HELP, files: [], smoke: SMOKE_GUIDANCE };
   const apply = flags.includes('--apply');
   const doTemplates = flags.includes('--templates');
   const doPlugin = flags.includes('--plugin');
+  if (apply && doTemplates && ['unavailable','empty','loading'].includes(opts.agentDiscovery)) {
+    throw new Error('OpenCode could not inspect agents in this project. Retry discovery before adding starter definitions.');
+  }
+  if (apply && doPlugin && opts.plugin === null) throw new Error('Could not confirm installed plugins. Retry discovery.');
 
   const cwd = await realpath(directory);
   const ids = agentIds(agents);
@@ -100,7 +107,7 @@ export async function install(directory, args = [], agents = [], selectedLead = 
     }
   }
   if (doPlugin) {
-    await plan('plugin/index.js', ['.opencode', 'plugins', 'agent-office'], 'index.js', false);
+    await plan('plugin/index.js', ['.opencode', 'plugins', 'agent-office'], 'index.js', opts.plugin === true);
   }
 
   if (apply) {
@@ -125,7 +132,10 @@ export async function install(directory, args = [], agents = [], selectedLead = 
   const models = Array.isArray(opts.models) ? opts.models : [];
   const result = {
     mode: apply ? 'apply' : 'preview',
+    ...(opts.agentDiscovery ? { agentDiscovery: opts.agentDiscovery, modelDiscovery: opts.modelDiscovery } : {}),
     lead,
+    settings: opts.settings,
+    sources: opts.sources,
     selectableAgents: selectable,
     models: models.map((m) => (m && typeof m === 'object' ? (m.providerID ? `${m.providerID}/${m.id}` : m.id) : String(m))),
     files: rows.map(({ source, ...row }) => row),
@@ -138,19 +148,21 @@ export async function install(directory, args = [], agents = [], selectedLead = 
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(SETUP_HELP + '\n');
+    return;
+  }
   const cwd = await realpath(process.cwd());
-  let agents = [];
-  let models = [];
+  let info;
   try {
-    const info = await inspect(cwd);
-    agents = info.agents;
-    models = info.models;
+    info = await inspect(cwd);
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
     return;
   }
-  const result = await install(cwd, process.argv.slice(2), agents, null, { models });
+  const result = await install(cwd, args, info.agents, info.settings.lead, info);
   console.log(JSON.stringify(result, null, 2));
   if (result.missing) {
     console.error(`Lead ${result.missing}: missing (no automatic substitution)`);
@@ -159,7 +171,7 @@ async function main() {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   main().catch((error) => {
-    console.error(error && error.stack ? error.stack : error);
+    console.error(error instanceof Error ? error.message : 'Agent Office setup failed.');
     process.exitCode = 1;
   });
 }

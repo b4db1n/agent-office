@@ -10,14 +10,15 @@ import { applyHostReady } from '@openchamber/sdk/ui';
 // @ts-ignore - shared/setup.mjs has no type declarations
 import { SETUP_PROMPT, selectLead } from '../shared/setup.mjs';
 import { issueExample, issuePreview } from '../shared/contribution.mjs';
-import { officeTeam } from '../shared/office.mjs';
+import { observation, steward } from '../shared/steward.mjs';
 
 const host = connectHost();
 const rootEl = document.querySelector<HTMLElement>('#root');
 if (!rootEl) throw new Error('Agent Office page has no root element.');
 const root: HTMLElement = rootEl;
 
-type InspectAgent = { id: string; mode?: string; hidden?: boolean };
+type ModelRef = { id: string; providerID: string; variant?: string };
+type InspectAgent = { id: string; mode?: string; hidden?: boolean; model?: ModelRef | null };
 type InspectResult = {
   agents: InspectAgent[];
   models: string[];
@@ -26,6 +27,18 @@ type InspectResult = {
   project: unknown;
   global: unknown;
   plugin: boolean | null;
+  agentDiscovery?: 'ready' | 'empty' | 'unavailable';
+  modelDiscovery?: 'ready' | 'empty' | 'unavailable';
+  hostModel?: ModelRef | null;
+  reservations?: {rootId:string|null;phase:string;estimatedLeadCost:number|null}[];
+};
+
+type CostResult = {
+  status: 'ok' | 'partial' | 'unsupported' | 'invalid' | 'no-data';
+  observed?: {agent:string;model:string;variant:string|null}[];
+  counts?: { reported: number; estimated: number; unknown: number };
+  reported?: number;
+  estimated?: number;
 };
 
 type State = {
@@ -46,6 +59,9 @@ type State = {
   inspectError: string;
   settingsScope: 'global' | 'project';
   contribText: string;
+  cost: CostResult | null;
+  costState: 'idle' | 'loading' | 'ready' | 'error';
+  costError: string;
 };
 
 const SETTINGS_KEYS = [
@@ -79,6 +95,9 @@ const state: State = {
   inspectError: '',
   settingsScope: 'project',
   contribText: issueExample,
+  cost: null,
+  costState: 'idle',
+  costError: '',
 };
 
 let subscriptionProject: string | null = null;
@@ -88,7 +107,12 @@ let unsubscribeSessions: (() => void) | null = null;
 let rootLoadGeneration = 0;
 let heightFrame = 0;
 let inspectGeneration = 0;
-const settingEdits = new Map<string,string>();
+let costGeneration = 0;
+let recordsGeneration = 0;
+const settingEdits = new Map<string, string>();
+let composingTask = false;
+const taskDrafts = new Map<string,string>();
+const submitting = new Set<string>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -160,20 +184,11 @@ function esc(value: unknown): string {
 }
 
 function toneFor(session: GuestSessionRecord): string {
-  if (session.activity === 'waiting-permission' || session.activity === 'waiting-question') return 'waiting';
-  if (session.activity === 'running' || session.activity === 'retrying') return 'running';
-  if (session.outcome === 'failed') return 'failed';
-  return session.unread || session.outcome === 'completed' ? 'ready' : 'idle';
+  return observation(session).tone;
 }
 
 function stateLabel(session: GuestSessionRecord): string {
-  if (session.activity === 'waiting-permission') return 'Waiting (permission)';
-  if (session.activity === 'waiting-question') return 'Waiting (question)';
-  if (session.activity === 'running') return 'Running';
-  if (session.activity === 'retrying') return 'Retrying';
-  if (session.outcome === 'failed') return 'Failed';
-  if (session.unread || session.outcome === 'completed') return 'Reply ready';
-  return session.activity === 'unknown' ? 'Status unknown' : 'Idle';
+  return observation(session).label;
 }
 
 function initials(value: string): string {
@@ -184,7 +199,7 @@ function initials(value: string): string {
 }
 
 function draftKey(): string {
-  return JSON.stringify([state.directory,state.rootId]);
+  return JSON.stringify([state.directory, state.rootId]);
 }
 
 async function loadDraft(): Promise<void> {
@@ -204,12 +219,11 @@ async function loadDraft(): Promise<void> {
 
 async function saveDraft(): Promise<void> {
   const key = `draft:talk:${draftKey()}`;
-  try {
-    await host.storage.set(key, state.talkDraft);
-  } catch {
-    // Drafts are best effort.
-  }
+  const text = state.talkDraft;
+  draftWrite = draftWrite.then(() => host.storage.set(key,text)).then(() => {}, () => {});
+  await draftWrite;
 }
+let draftWrite = Promise.resolve();
 
 async function inspect(): Promise<void> {
   if (!state.directory) {
@@ -236,19 +250,39 @@ async function inspect(): Promise<void> {
   render();
 }
 
+function unsetForSave(): string[] {
+  const unset: string[] = [];
+  for (const key of SETTINGS_KEYS) {
+    if (!settingEdits.has(key)) continue;
+    const el = document.getElementById(`setting-${key}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+    if (!el) continue;
+    if (!el.value.trim()) unset.push(key);
+  }
+  return unset;
+}
+
 async function saveSettings(): Promise<void> {
+  if (!settingEdits.size) return;
   if (!state.directory) {
     toast('error', 'Open a project first.');
     return;
   }
   const values: Record<string, unknown> = {};
+  const unset: string[] = [];
   for (const key of SETTINGS_KEYS) {
     if (!settingEdits.has(key)) continue;
-    const el = document.getElementById(`setting-${key}`) as HTMLInputElement | HTMLTextAreaElement | null;
+    const el = document.getElementById(`setting-${key}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
     if (!el) continue;
     const raw = el.value;
-    if (!raw.trim()) values[key] = null;
-    else if (key === 'notifications') values[key] = raw === 'true';
+    if (!raw.trim()) {
+      unset.push(key);
+      continue;
+    }
+    if (raw.trim() === 'null') {
+      values[key] = null;
+      continue;
+    }
+    if (key === 'notifications') values[key] = raw === 'true';
     else if (key === 'parallelism' || key === 'budget') {
       const num = Number(raw);
       values[key] = Number.isFinite(num) && raw.trim() !== '' ? num : raw;
@@ -267,8 +301,12 @@ async function saveSettings(): Promise<void> {
       values[key] = raw;
     }
   }
+  const payload: Record<string, unknown> = { directory: state.directory, scope: state.settingsScope, values };
+  const directory = state.directory, scope = state.settingsScope;
+  if (unset.length > 0) payload.unset = unset;
   try {
-    await callService('/settings', { directory: state.directory, scope: state.settingsScope, values });
+    await callService('/settings', payload);
+    if (directory !== state.directory || scope !== state.settingsScope) return;
     settingEdits.clear();
     toast('success', `Settings saved (${state.settingsScope}).`);
     await inspect();
@@ -279,6 +317,7 @@ async function saveSettings(): Promise<void> {
 
 function setView(view: State['view']): void {
   state.view = view;
+  if (view === 'office' && state.rootId && state.costState === 'idle') void loadCost();
   if (view === 'settings' && !state.inspect && state.directory) void inspect();
   render();
 }
@@ -302,7 +341,6 @@ async function openSession(id: string): Promise<void> {
 }
 
 function talkToAgent(id: string): void {
-  state.talkDraft = state.talkDraft; // keep
   void openSession(id);
 }
 
@@ -313,6 +351,22 @@ async function copySetupPrompt(): Promise<void> {
   } catch {
     toast('error', 'Could not copy. Select and copy manually.');
   }
+}
+
+async function copyDraft(): Promise<void> {
+  try {
+    await host.writeClipboard(state.talkDraft);
+    toast('success', 'Draft copied.');
+  } catch {
+    toast('error', 'Could not copy. Select and copy manually.');
+  }
+}
+
+function clearDraft(): void {
+  state.talkDraft = '';
+  state.drafts.set(draftKey(), '');
+  void saveDraft();
+  render();
 }
 
 function openContributeIssue(): void {
@@ -339,8 +393,42 @@ function setRoot(id: string | null, title: string): boolean {
   state.rootId = id;
   state.rootTitle = title;
   state.talkDraft = '';
+  state.cost = null;
+  state.costState = 'idle';
+  state.costError = '';
   void loadDraft();
   return true;
+}
+
+async function loadCost(): Promise<void> {
+  if (state.costState === 'loading' || state.view !== 'office') return;
+  if (!state.directory || !state.rootId) {
+    state.cost = null;
+    state.costState = 'idle';
+    state.costError = '';
+    render();
+    return;
+  }
+  const directory = state.directory;
+  const rootId = state.rootId;
+  const generation = ++costGeneration;
+  state.costState = 'loading';
+  state.costError = '';
+  render();
+  try {
+    const result = await callService<CostResult>('/usage', { directory, rootId });
+    if (generation !== costGeneration) return;
+    if (state.directory !== directory || state.rootId !== rootId) return;
+    state.cost = result;
+    state.costState = 'ready';
+  } catch (error) {
+    if (generation !== costGeneration) return;
+    if (state.directory !== directory || state.rootId !== rootId) return;
+    state.costState = 'error';
+    state.costError = plainError(error);
+    state.cost = null;
+  }
+  render();
 }
 
 async function ensureProject(force = false): Promise<void> {
@@ -392,11 +480,26 @@ async function ensureProject(force = false): Promise<void> {
 
     const unsubscribe = await host.onSessions(projectId, (snapshot) => {
       if (generation !== subscriptionGeneration) return;
-      if (snapshot.kind !== 'sessions') return;
+      if (snapshot.kind !== 'sessions' || (snapshot.projectId && snapshot.projectId !== projectId)) return;
+      const ids = (s: GuestSessionsSnapshot | null) => s?.sessions.filter(x => x.directory === directory && !x.parentId && !x.archivedAt).map(x => x.id).sort().join(':');
+      const rootsChanged = ids(snapshot) !== ids(state.snapshot);
       state.snapshot = snapshot;
       state.snapshotState = snapshot.state === 'ready' ? 'ready' : snapshot.state === 'loading' ? 'loading' : 'error';
       state.snapshotError = snapshot.state === 'error' ? 'OpenChamber could not read the session list.' : '';
       render();
+      if (rootsChanged && state.inspect) {
+        const token = ++recordsGeneration;
+        void callService<Pick<InspectResult,'reservations'>>('/records', { directory }).then(result => {
+          if (token === recordsGeneration && generation === subscriptionGeneration && state.inspect) {
+            state.inspect.reservations = result.reservations; render();
+          }
+        }).catch(() => {
+          if (token === recordsGeneration && generation === subscriptionGeneration && state.inspect) {
+            state.inspect.reservations = undefined; render();
+          }
+        });
+      }
+      if (state.rootId && snapshot.state === 'ready' && state.costState === 'idle') void loadCost();
     });
     if (generation !== subscriptionGeneration) {
       unsubscribe();
@@ -413,58 +516,47 @@ async function ensureProject(force = false): Promise<void> {
 }
 
 function renderStatus(): string {
-  const lead = selectLead(state.inspect?.agents ?? [],state.inspect?.settings.lead);
-  const team = officeSessions();
-  const checks = [
-    ['Project', !!state.directory, state.directory ? 'Current project selected.' : 'Open a project to scope the Office.'],
-    ['Session access', state.snapshotState === 'ready', state.snapshotState === 'ready' ? 'Live updates connected.' : 'Approve session access to see the team.'],
-    ['Local service', state.inspectState === 'ready', state.inspectState === 'ready' ? 'OpenCode answered.' : 'Allow the service and opencode executable in Extensions.'],
-    ['Lead', !!lead.selected, lead.selected || `Choose ${lead.available.join(' or ') || 'a starter lead'} in Settings to receive work.`],
-    ['Models', !!state.inspect?.models.length, `${state.inspect?.models.length ?? 0} available. Choose the lead and specialist models in Settings.`],
-    ['Chat command', state.inspect?.plugin === true, state.inspect?.plugin ? '/office is available.' : 'Use Ask Office lead, or preview the companion plugin for /office.'],
-  ];
-  return `
-    <div class="ao-shell">
-      <h2 class="ao-title">Agent Office</h2>
-      <p class="ao-sub">${esc(state.directory ?? 'No project directory')}</p>
-      <div class="ao-card">
-        <div class="ao-checklist">
-          ${checks
-            .map(
-               ([label, ok, hint]) => `
-            <div class="ao-check ${ok ? 'ok' : ''}">
-              <span class="dot"></span>
-               <span>${esc(label)}: ${esc(hint)}</span>
-            </div>`,
-            )
-            .join('')}
-        </div>
-         <div class="ao-row">
-           <button class="ao-btn" data-view="settings">Settings</button>
-           <button class="ao-btn" data-view="office">Open Office</button>
-          <button class="ao-btn primary" data-action="copySetup">Copy setup prompt</button>
-          <button class="ao-btn" data-action="refresh">Refresh</button>
-        </div>
-        <div>${team.filter(s => toneFor(s) === 'waiting' || toneFor(s) === 'ready').map(s => `<button class="ao-btn" data-session="${esc(s.id)}">${esc(s.agent || s.title)} · ${esc(stateLabel(s))}</button>`).join('')}</div>
-        <details><summary>Read setup prompt</summary><pre class="ao-pre">${esc(SETUP_PROMPT)}</pre></details>
-      </div>
-    </div>
-  `;
+  const health = steward(state);
+  const preview = settingEdits.size > 0;
+  return `<section class="ao-shell ao-status">
+    <h2 class="ao-title">Agent Office · ${preview ? 'Setup preview pending' : esc(health.state)}</h2>
+    <p class="ao-sub" title="${esc(state.directory)}">${esc(state.directory?.split('/').pop() || 'No project')}</p>
+    <div>${preview ? 'Review your unsaved changes in Settings.' : esc(health.reason)}</div>
+    ${health.configured ? `<div>Lead: <b>${esc(state.inspect?.settings.lead)}</b> · ${esc(health.model ?? 'Unknown model')} (${esc(health.source)})</div>` : ''}
+    ${health.state === 'Setup required' ? setupControls() : ''}
+    ${health.configured ? `<div><strong>Office Steward</strong> · current work</div>
+      ${health.records.length ? health.records.map(r => `<button class="ao-btn" data-record="${esc(r.id)}" data-current="${r.id === state.rootId ? 'true' : 'false'}">${esc(r.agent || r.title)} · ${esc(r.label)}${r.id === state.rootId ? ' · viewing' : ''}</button>`).join('')
+      : '<span class="ao-muted">No confirmed Office team visible for this project.</span>'}
+      ${state.rootId && health.records.length && !health.records.some(r => r.id === state.rootId) ? `<p class="ao-muted">Viewing ${esc(state.rootTitle || state.rootId)} — not part of this Office team.</p>` : ''}` : ''}
+    <div class="ao-row">${health.state === 'Ready' && !preview && !composingTask ? '<button id="ask-office" class="ao-btn primary" data-action="askOffice">Ask Office lead</button>' : ''}<button class="ao-btn" data-view="office">Open Office</button>
+    <button class="ao-btn" data-view="settings">Settings</button>
+    <button class="ao-btn" data-action="refresh">Refresh</button></div>
+    ${composingTask && health.state === 'Ready' && !preview ? `<label for="office-task">New task for ${esc(state.inspect?.settings.lead)}</label>
+      <textarea id="office-task" maxlength="32000" class="ao-input">${esc(taskDrafts.get(state.directory!) ?? '')}</textarea>
+      <div class="ao-row"><button class="ao-btn primary" data-action="submitTask" ${submitting.has(state.directory!) ? 'disabled' : ''}>Send to lead</button>
+      <button class="ao-btn" data-action="cancelTask">Cancel</button></div>` : ''}
+    </section>`;
+}
+
+function setupControls(): string {
+  return `<p>Inspect this project, preview missing definitions, then approve only what you want.</p>
+    <button class="ao-btn" data-action="copySetup">Copy setup prompt</button>`;
 }
 
 function renderOffice(): string {
   const sessions = officeSessions();
+  const viewingOutside = !!state.rootId && !sessions.some(s => s.id === state.rootId);
   const agentsHtml =
     sessions.length === 0
-      ? `<div class="ao-empty">${state.snapshotState === 'ready' ? 'No team visible under this chat.' : 'Waiting for project sessions…'}</div>`
+      ? `<div class="ao-empty">${state.snapshotState === 'ready' ? 'No confirmed Office team visible for this project.' : 'Waiting for project sessions…'}</div>`
       : `<div class="ao-grid">
           ${sessions
             .map(
               (s) => `
-            <button id="agent-${esc(s.id)}" class="ao-agent" data-tone="${toneFor(s)}" data-session="${esc(s.id)}">
+            <button id="agent-${esc(s.id)}" class="ao-agent" data-tone="${toneFor(s)}" data-session="${esc(s.id)}" data-current="${s.id === state.rootId ? 'true' : 'false'}"${s.id === state.rootId ? ' title="Viewing this chat"' : ''}>
               <span class="ao-avatar" aria-hidden="true">${esc(initials(s.agent || s.title))}</span>
               <div class="ao-row" style="justify-content:space-between;">
-                <span class="ao-agent-name">${esc(s.agent || s.title)}</span>
+                <span class="ao-agent-name">${esc(s.agent || s.title)}${s.id === state.rootId ? ' (viewing)' : ''}</span>
                 <span class="ao-agent-state">${esc(stateLabel(s))}</span>
               </div>
               <div class="ao-agent-detail">${esc(s.title)}</div>
@@ -474,6 +566,7 @@ function renderOffice(): string {
             .join('')}
         </div>`;
   const talkValue = esc(state.talkDraft);
+  const costHtml = state.rootId ? renderCostCard() : '';
   return `
     <div class="ao-shell">
       <div>
@@ -481,6 +574,7 @@ function renderOffice(): string {
         <p class="ao-sub">${esc(state.rootTitle || state.directory || 'No session')}</p>
       </div>
       ${agentsHtml}
+      ${viewingOutside ? `<p class="ao-muted">Viewing ${esc(state.rootTitle || state.rootId)} — this chat is not part of the Office team shown.</p>` : ''}
       <div class="ao-card">
         <div class="ao-field">
           <label for="talk-draft">Talk (opens session, never sends)</label>
@@ -488,9 +582,40 @@ function renderOffice(): string {
         </div>
         <div class="ao-row">
           ${state.rootId ? `<button class="ao-btn primary" data-action="talkOpen">Open selected session</button>` : ''}
+          <button class="ao-btn" data-action="copyDraft">Copy draft</button>
+          <button class="ao-btn" data-action="talkClear">Clear draft</button>
           <button class="ao-btn" data-action="refresh">Refresh</button>
         </div>
       </div>
+      ${costHtml}
+    </div>
+  `;
+}
+
+function renderCostCard(): string {
+  const c = state.cost;
+  if (state.costState === 'loading') {
+    return `<div class="ao-card"><h3 class="ao-title" style="font-size:13px;">Cost</h3><p class="ao-muted">Loading…</p></div>`;
+  }
+  if (state.costState === 'error') {
+    return `<div class="ao-card"><h3 class="ao-title" style="font-size:13px;">Cost</h3><p class="ao-muted">${esc(state.costError)}</p><button class="ao-btn" data-action="refreshCost">Refresh cost</button></div>`;
+  }
+  if (!c || !['ok','partial','no-data'].includes(c.status)) {
+    return `<div class="ao-card"><h3 class="ao-title" style="font-size:13px;">Cost</h3><p class="ao-muted">Usage unavailable.</p><button class="ao-btn" data-action="refreshCost">Refresh cost</button></div>`;
+  }
+  const counts = c.counts ?? { reported: 0, estimated: 0, unknown: 0 };
+  const dollars = (n: number | undefined) => n === undefined || !Number.isFinite(n) ? 'Unknown' :
+    n > 0 && n < .000001 ? '&lt;$0.000001' : `$${n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:6})}`;
+  return `
+    <div class="ao-card">
+      <h3 class="ao-title" style="font-size:13px;">Cost</h3>
+      ${c.status === 'no-data' ? '<div>No usage observed.</div>' : ''}
+      ${c.status === 'partial' ? '<div>Partial usage — totals are incomplete.</div>' : ''}
+      ${counts.reported ? `<div>Host-reported: ${dollars(c.reported)}</div>` : ''}
+      ${counts.estimated ? `<div>Estimated at catalog rates: ${dollars(c.estimated)}</div>` : ''}
+      ${counts.unknown ? `<div>Unknown cost: ${Number(counts.unknown)} messages</div>` : ''}
+      ${(c.observed ?? []).map(item => `<div>Observed: ${esc(item.agent)} · ${esc(item.model)}${item.variant ? `#${esc(item.variant)}` : ''}</div>`).join('')}
+      <button class="ao-btn" data-action="refreshCost">Refresh cost</button>
     </div>
   `;
 }
@@ -503,25 +628,33 @@ function renderSettings(): string {
     const valueStr =
       typeof val === 'string'
         ? val
-        : val === null || val === undefined
+         : val === null && state.settingsScope === 'project' ? 'null' : val === null || val === undefined
           ? ''
           : JSON.stringify(val, null, 2);
     const isLong = key === 'agentModels' || key === 'visibleControls';
-    const choices = key === 'lead' ? selectLead(insp?.agents ?? [],null).available
-      : ['leadModel','specialistModel'].includes(key) ? insp?.models ?? []
-      : key === 'notifications' ? ['true','false'] : null;
+    const choices = key === 'lead' ? selectLead(insp?.agents ?? [], null).available
+      : ['leadModel', 'specialistModel'].includes(key) ? insp?.models ?? []
+      : key === 'notifications' ? ['true', 'false']
+      : key === 'appearance' ? ['system', 'light', 'dark']
+      : null;
     const control = choices
-      ? `<select id="setting-${key}" class="ao-input"><option value="">Inherit default</option>${choices.map((id:string) => `<option value="${esc(id)}" ${id === valueStr ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>`
+      ? `<select id="setting-${key}" class="ao-input"><option value="">Inherit default</option><option value="null" ${valueStr==='null'?'selected':''}>Host default</option>${[...new Set([...choices,...(valueStr && valueStr!=='null' ? [valueStr] : [])])].map(id => `<option value="${esc(id)}" ${id === valueStr ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>`
       : isLong
-      ? `<textarea id="setting-${key}" class="ao-textarea">${esc(valueStr)}</textarea>`
-      : `<input id="setting-${key}" class="ao-input" value="${esc(valueStr)}" />`;
-    return `<div class="ao-field"><label for="setting-${key}">${esc(key)}</label>${control}<small>Effective: ${esc(JSON.stringify(insp?.settings[key]) ?? 'Host default')} · ${esc(insp?.sources[key] ?? 'host')}</small></div>`;
+      ? `<textarea id="setting-${key}" class="ao-textarea" placeholder="{}">${esc(valueStr)}</textarea>`
+      : `<input id="setting-${key}" class="ao-input" value="${esc(valueStr)}" placeholder="${key === 'language' ? 'en' : ''}" />`;
+    return `<div class="ao-field"><label for="setting-${key}">${esc(key)}</label>${control}<small>Effective: ${esc(JSON.stringify(insp?.settings?.[key]) ?? 'Host default')} · ${esc(insp?.sources?.[key] ?? 'host')}</small></div>`;
   }).join('');
 
   const agentsHtml = (insp?.agents ?? [])
-    .map((a) => `<tr><td>${esc(a.id)}</td><td>${esc(a.mode ?? '')}</td><td>${a.hidden ? 'yes' : 'no'}</td></tr>`)
+    .map((a) => `<tr><td>${esc(a.id)}</td><td>${esc(a.mode ?? '')}</td><td>${a.hidden ? 'yes' : 'no'}</td><td>${esc(a.model ? `${a.model.providerID}/${a.model.id}${a.model.variant ? ` (${a.model.variant})` : ''}` : '')}</td></tr>`)
     .join('');
   const modelsHtml = (insp?.models ?? []).map((m) => `<li>${esc(m)}</li>`).join('');
+
+  const hostModel = insp?.hostModel;
+  const hostModelText = hostModel ? `${hostModel.providerID}/${hostModel.id}${hostModel.variant ? ` (${hostModel.variant})` : ''}` : 'Host default';
+  const bound = insp?.agents?.find(a => a.id === insp.settings.lead)?.model;
+  const effectiveLeadModel = typeof insp?.settings?.leadModel === 'string' ? insp.settings.leadModel : bound ? `${bound.providerID}/${bound.id}${bound.variant ? `#${bound.variant}` : ''}` : hostModelText;
+  const leadModelSource = insp?.sources?.leadModel ?? 'host';
 
   return `
     <div class="ao-shell">
@@ -530,22 +663,30 @@ function renderSettings(): string {
         <p class="ao-sub">${state.inspectState === 'loading' ? 'Loading…' : state.inspectError ? esc(state.inspectError) : 'Effective configuration'}</p>
       </div>
       <div class="ao-card">
+        <p class="ao-muted">Agent discovery: ${esc(insp?.agentDiscovery ?? 'unknown')} · Model discovery: ${esc(insp?.modelDiscovery ?? 'unknown')}</p>
+        <details><summary>Revisit setup</summary>${setupControls()}</details>
+        <p class="ao-muted">Host default model: ${esc(hostModelText)}</p>
+        <p class="ao-muted">Requested lead model: ${esc(effectiveLeadModel)} (${esc(leadModelSource)}). Specialist selection is a preference, not enforced routing.</p>
+        <p class="ao-muted">Office admission budget: blank inherits; null means no Office limit. A finite budget, including 0, blocks dispatch when the host cannot bound delegated costs.</p>
+        <p class="ao-muted">Recorded reservations (rechecked on admission): ${insp?.reservations?.length ?? 'unknown'}. These are not observed charges.</p>
+        <p class="ao-muted">Localization and notification delivery are not implemented; appearance and visible controls use sensible defaults.</p>
         <div class="ao-row">
           <span class="ao-muted">Scope:</span>
           <button class="ao-btn ${state.settingsScope === 'global' ? 'primary' : ''}" data-scope="global">Global</button>
           <button class="ao-btn ${state.settingsScope === 'project' ? 'primary' : ''}" data-scope="project">Project</button>
-          <button class="ao-btn primary" data-action="saveSettings">Save</button>
+           <button class="ao-btn primary" data-action="saveSettings">Apply changes</button>
           <button class="ao-btn" data-action="refreshInspect">Refresh</button>
         </div>
-        <div class="ao-field-grid" style="display:grid;gap:8px;">
+         <output id="settings-preview">${esc(settingsPreview())}</output>
+         <div class="ao-field-grid" style="display:grid;gap:8px;">
           ${fields}
         </div>
       </div>
       <div class="ao-card">
         <h3 class="ao-title" style="font-size:13px;">Agents</h3>
         <table class="ao-table">
-          <thead><tr><th>id</th><th>mode</th><th>hidden</th></tr></thead>
-          <tbody>${agentsHtml || '<tr><td colspan="3" class="ao-muted">None</td></tr>'}</tbody>
+          <thead><tr><th>id</th><th>mode</th><th>hidden</th><th>model</th></tr></thead>
+          <tbody>${agentsHtml || '<tr><td colspan="4" class="ao-muted">None</td></tr>'}</tbody>
         </table>
       </div>
       <div class="ao-card">
@@ -581,6 +722,12 @@ function renderContribute(): string {
   `;
 }
 
+function settingsPreview(): string {
+  const layer = state.inspect?.[state.settingsScope];
+  return settingEdits.size ? 'Setup preview pending · ' + [...settingEdits].map(([key,value]) =>
+    `${key}: ${JSON.stringify(isRecord(layer) ? layer[key] ?? null : null)} → ${value || 'inherit'}`).join('; ') : '';
+}
+
 function renderPanel(): string {
   const tabs = (['office', 'settings', 'contribute'] as const)
     .map(
@@ -600,30 +747,72 @@ function renderPanel(): string {
   `;
 }
 
-let lastFocusId: string | null = null;
-
 function render(): void {
-  lastFocusId = document.activeElement && document.activeElement.id ? document.activeElement.id : null;
+  const active = document.activeElement as HTMLInputElement | HTMLTextAreaElement | null;
+  let savedFocus: string | null = null;
+  let savedSelection: { start: number; end: number; direction: 'forward' | 'backward' | 'none' } | null = null;
+  if (active && active.id) {
+    savedFocus = active.id;
+    if (typeof active.selectionStart === 'number') {
+      savedSelection = {
+        start: active.selectionStart,
+        end: active.selectionEnd ?? active.selectionStart,
+        direction: (active.selectionDirection as 'forward' | 'backward' | 'none') ?? 'none',
+      };
+    }
+  }
   if (state.surface === 'status') {
     root.innerHTML = state.view === 'status' ? renderStatus() : `<button data-view="status" class="ao-btn">Back to Work Status</button>` + renderPanel();
   } else {
     root.innerHTML = renderPanel();
   }
-  if (lastFocusId) {
-    const el = document.getElementById(lastFocusId);
-    if (el && typeof (el as HTMLElement).focus === 'function') (el as HTMLElement).focus();
+  if (savedFocus) {
+    const el = document.getElementById(savedFocus) as HTMLElement | null;
+    if (el && typeof (el as { focus?: () => void }).focus === 'function') {
+      (el as { focus: () => void }).focus();
+      if (savedSelection && typeof (el as { setSelectionRange?: (a: number, b: number, c?: string) => void }).setSelectionRange === 'function') {
+        try {
+          (el as { setSelectionRange: (a: number, b: number, c?: string) => void }).setSelectionRange(
+            savedSelection.start,
+            savedSelection.end,
+            savedSelection.direction,
+          );
+        } catch {
+          // Ignore.
+        }
+      }
+    }
   }
   if (state.surface === 'status') scheduleHeight();
 }
 
-// Expose handlers
 const handlers = {
+  askOffice: () => { composingTask = true; render(); document.getElementById('office-task')?.focus(); },
+  cancelTask: () => { composingTask = false; render(); document.getElementById('ask-office')?.focus(); },
+  submitTask: async () => {
+    const dir = state.directory, prompt = dir && taskDrafts.get(dir)?.trim();
+    if (!dir || !prompt || submitting.has(dir) || steward(state).state !== 'Ready') return;
+    submitting.add(dir); render();
+    try {
+      const accepted = await callService('/dispatch', {directory:dir, prompt});
+      if (typeof accepted.sessionId !== 'string' || accepted.directory !== dir) throw new Error('Delivery unconfirmed. Inspect the Office before retrying.');
+      taskDrafts.delete(dir);
+      if (dir === state.directory) {
+        composingTask = false;
+        await openSession(accepted.sessionId);
+      }
+    } catch (e) { toast('error', plainError(e)); }
+    finally { submitting.delete(dir); if (dir === state.directory) void inspect(); }
+  },
   setView: (v: string) => setView(v as State['view']),
   refresh: () => {
     void ensureProject(true);
   },
   refreshInspect: () => {
     void inspect();
+  },
+  refreshCost: () => {
+    void loadCost();
   },
   openSession: (id: string) => {
     void openSession(id);
@@ -635,6 +824,12 @@ const handlers = {
   },
   talkOpen: () => {
     if (state.rootId) void openSession(state.rootId);
+  },
+  copyDraft: () => {
+    copyDraft();
+  },
+  talkClear: () => {
+    clearDraft();
   },
   copySetup: () => {
     void copySetupPrompt();
@@ -666,14 +861,17 @@ host.onReady((context) => {
   const rootChanged = setRoot(context.session?.id ?? null, context.session?.title ?? '');
   render();
   if (rootChanged || state.directory !== previousDirectory) void ensureProject();
-  if (state.surface === 'status') void inspect();
+  if (state.rootId) void loadCost();
 });
 
 host.onSession((session: SessionSnapshot | null) => {
   const previousTitle = state.rootTitle;
   const rootChanged = setRoot(session?.id ?? null, session?.title ?? '');
   if (rootChanged || state.rootTitle !== previousTitle) render();
-  if (rootChanged) void ensureProject();
+  if (rootChanged) {
+    void ensureProject();
+    if (state.rootId) void loadCost();
+  }
 });
 
 host.onDirectory((directory) => {
@@ -681,24 +879,34 @@ host.onDirectory((directory) => {
   changeDirectory(directory);
   render();
   void ensureProject();
-  void inspect();
 });
 
 function changeDirectory(directory: string | null) {
   if (directory === state.directory) return;
-  subscriptionGeneration++; projectLoadGeneration++; inspectGeneration++; rootLoadGeneration++;
+  subscriptionGeneration++; projectLoadGeneration++; inspectGeneration++; rootLoadGeneration++; costGeneration++;
   unsubscribeSessions?.(); unsubscribeSessions = null; subscriptionProject = null;
   state.directory = directory; state.snapshot = null; state.projectId = null;
+  composingTask = false;
   settingEdits.clear();
+  state.settingsScope = 'project';
   state.inspect = null; state.inspectState = 'idle'; state.snapshotState = 'loading';
   state.rootId = null; state.talkDraft = ''; state.rootTitle = '';
+  state.cost = null; state.costState = 'idle'; state.costError = '';
 }
+
 function officeSessions(): GuestSessionRecord[] {
-  return officeTeam(state.snapshot,state.projectId,state.rootId);
+  // One projection feeds both surfaces: Work Status records and this grid
+  // always carry the same confirmed Office family ids.
+  return steward(state).family as GuestSessionRecord[];
 }
 root.addEventListener('input', e => {
   const field = e.target as HTMLInputElement;
-  if (field.id?.startsWith('setting-')) settingEdits.set(field.id.slice(8),field.value);
+  if (field.id === 'office-task' && state.directory) taskDrafts.set(state.directory,field.value);
+  if (field.id?.startsWith('setting-')) {
+    settingEdits.set(field.id.slice(8), field.value);
+    const preview = document.getElementById('settings-preview');
+    if (preview) preview.textContent = settingsPreview();
+  }
   if (e.target instanceof HTMLTextAreaElement && e.target.id === 'talk-draft') handlers.talkInput(e.target.value);
   if (e.target instanceof HTMLTextAreaElement && e.target.id === 'contrib-text') state.contribText = e.target.value;
 });
@@ -708,8 +916,13 @@ root.addEventListener('click', e => {
   const button = (e.target as Element).closest<HTMLElement>('[data-action],[data-scope]');
   if (button?.dataset.scope) handlers.setScope(button.dataset.scope);
   const key = button?.dataset.action;
-  if (key && ['copySetup','refresh','refreshInspect','saveSettings','openIssueDraft','cancelContribute','talkOpen'].includes(key)) (handlers[key as keyof typeof handlers] as () => void)();
+  if (key && ['askOffice','submitTask','cancelTask','copySetup','refresh','refreshInspect','refreshCost','saveSettings','openIssueDraft','cancelContribute','talkOpen','copyDraft','talkClear'].includes(key)) (handlers[key as keyof typeof handlers] as () => void)();
   const id = (e.target as Element).closest<HTMLElement>('[data-session]')?.dataset.session;
   if (id && officeSessions().some(s => s.id === id)) void openSession(id);
+  const record = (e.target as Element).closest<HTMLElement>('[data-record]')?.dataset.record;
+  if (record && steward(state).records.some(s => s.id === record)) void openSession(record);
+});
+root.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && composingTask) handlers.cancelTask();
 });
 render();

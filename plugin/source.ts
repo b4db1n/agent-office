@@ -32,7 +32,7 @@ export default {
             `Session ID: ${result.sessionId}`,
           ];
           if (result.lead) lines.push(`Lead: ${result.lead}`);
-          if (result.leadModel) lines.push(`Model: ${result.leadModel}`);
+          if (result.requestedLeadModel) lines.push(`Requested model: ${result.requestedLeadModel}`);
           lines.push('Open it from the Agent Office panel or the session list.');
 
           await ctx.session.synthetic({

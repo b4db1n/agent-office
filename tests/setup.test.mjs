@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
-import { selectLead } from '../shared/setup.mjs';
+import {
+  OFFICE_REPO_URL,
+  PREVIEW_COMMAND,
+  SETUP_HELP,
+  SETUP_PROMPT,
+  selectLead,
+} from '../shared/setup.mjs';
+
+const readDoc = (name) => readFile(new URL(name, import.meta.url), 'utf8');
 
 const READY = 'ready';
 const CHOOSE = 'choose-lead';
@@ -179,4 +188,46 @@ test('selectLead: accepts id-keyed map of agent records', () => {
   assert.equal(r.selected, 'alpha');
   assert.deepEqual(r.available, ['alpha']);
   assert.equal(r.nextAction, READY);
+});
+
+test('SETUP_PROMPT discovers the companion, never picks a file, and gates writes', () => {
+  assert.match(SETUP_PROMPT, /command -v agent-office/);
+  assert.ok(SETUP_PROMPT.includes(OFFICE_REPO_URL));
+  assert.match(SETUP_PROMPT, /Do not ask me to choose a file or folder/);
+  assert.match(SETUP_PROMPT, /no file may be written before that approval/i);
+  assert.match(SETUP_PROMPT, /exact lead id/i);
+  assert.match(SETUP_PROMPT, /exact model ids/i);
+  assert.match(SETUP_PROMPT, /never run a model of unknown or paid cost/);
+  assert.doesNotMatch(SETUP_PROMPT, /\$OFFICE/);
+  assert.doesNotMatch(SETUP_PROMPT, /curl\s*\|/);
+});
+
+test('terminal preview uses the installed repaired companion without downloading moving main', () => {
+  assert.ok(!PREVIEW_COMMAND.includes('git clone'));
+  assert.ok(PREVIEW_COMMAND.includes('$HOME/.config/openchamber/extensions/agent-office'));
+  assert.ok(PREVIEW_COMMAND.includes('shared/family.mjs'));
+  assert.ok(PREVIEW_COMMAND.includes('"$d/companion/setup.mjs" --templates --plugin'));
+  assert.ok(PREVIEW_COMMAND.includes('&&'));
+  assert.ok(!PREVIEW_COMMAND.includes('$OFFICE'));
+  assert.ok(!PREVIEW_COMMAND.includes('curl'));
+  assert.ok(!PREVIEW_COMMAND.includes('\\'));
+});
+
+test('SETUP_HELP agrees with the documented guide and README', async () => {
+  const guide = await readDoc('../docs/GETTING-STARTED.md');
+  const readme = await readDoc('../README.md');
+  for (const line of SETUP_HELP.split('\n')) {
+    if (!line.trim()) continue;
+    assert.ok(
+      guide.includes(line) || readme.includes(line),
+      `Help line is missing from the docs: ${line}`,
+    );
+  }
+  assert.ok(guide.includes(PREVIEW_COMMAND));
+  assert.ok(readme.includes(PREVIEW_COMMAND));
+});
+
+test('the documented chat prompt matches the shared prompt exactly', async () => {
+  const guide = await readDoc('../docs/GETTING-STARTED.md');
+  assert.ok(guide.includes(SETUP_PROMPT));
 });

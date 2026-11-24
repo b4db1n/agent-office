@@ -1,7 +1,8 @@
 /** Return the visible root and its descendants in one project snapshot. */
-export function officeTeam(snapshot, projectId, rootId) {
+export function officeTeam(snapshot, projectId, rootId, directory) {
   if (!rootId || !projectId || snapshot?.state !== 'ready') return [];
-  const sessions = snapshot.sessions.filter(s => !s.archivedAt && s.projectId === projectId);
+  const sessions = snapshot.sessions.filter(s => !s.archivedAt && s.projectId === projectId &&
+    (!directory || s.directory === directory));
   const byId = new Map(sessions.map(s => [s.id,s]));
   if (!byId.has(rootId)) return [];
   return sessions.filter(s => {

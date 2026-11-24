@@ -2,12 +2,11 @@
  * Agent Office — shared settings helpers.
  */
 
-import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { mkdir, open, readFile, rename, realpath, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { runOpenCode } from './host.mjs';
 
 export const SETTINGS_KEYS = Object.freeze([
   'lead',
@@ -42,20 +41,29 @@ function emptyState() {
 }
 
 async function readState() {
-  for (const file of [stateFile(), ...STATE_CANDIDATES]) {
+  const files = process.env.AGENT_OFFICE_SETTINGS_FILE ? [stateFile()] : STATE_CANDIDATES;
+  for (const file of files) {
     try {
       const raw = await readFile(file, 'utf8');
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        if (!parsed.global || typeof parsed.global !== 'object' || Array.isArray(parsed.global)) parsed.global = {};
-        if (!parsed.projects || typeof parsed.projects !== 'object' || Array.isArray(parsed.projects)) parsed.projects = {};
-        return parsed;
+      if (!isRecord(parsed)) throw new Error('Invalid Office settings.');
+      for (const key of ['global', 'projects']) {
+        if (own(parsed, key) && !isRecord(parsed[key])) throw new Error('Invalid settings layer.');
       }
-    } catch {
-      // Try next candidate.
+      return { ...parsed, global: parsed.global ?? {}, projects: parsed.projects ?? {} };
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw new Error('Agent Office could not read its saved settings. No changes were made.');
     }
   }
   return emptyState();
+}
+
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function own(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 // A scope holds only what it sets. Filling absent keys with null would make an
@@ -95,7 +103,9 @@ function validateValues(values) {
         out[key] = value;
         break;
       case 'agentModels':
-        if (typeof value !== 'object' || Array.isArray(value)) throw new Error(`${key} must be an object or null.`);
+        if (!isRecord(value) || Object.values(value).some((entry) => entry !== null && (typeof entry !== 'string' || !entry.trim()))) {
+          throw new Error('Agent model overrides must map agent IDs to provider/model values or null.');
+        }
         out[key] = value;
         break;
       case 'notifications':
@@ -113,6 +123,8 @@ function validateValues(values) {
       case 'parallelism':
       case 'budget':
         if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${key} must be a number or null.`);
+        if (key === 'parallelism' && (!Number.isInteger(value) || value < 0)) throw new Error('Parallelism must be a non-negative whole number.');
+        if (key === 'budget' && value < 0) throw new Error('Budget cannot be negative.');
         out[key] = value;
         break;
       default:
@@ -132,108 +144,65 @@ function effectiveSettings(project, global) {
       result[key] = project[key];
     }
   }
+  if (isRecord(project.agentModels)) {
+    result.agentModels = { ...(isRecord(global.agentModels) ? global.agentModels : {}), ...project.agentModels };
+  }
   return result;
 }
 
 function sourcesFor(project, global) {
   const result = {};
   for (const key of SETTINGS_KEYS) {
-    const value = Object.prototype.hasOwnProperty.call(project, key) ? project[key] : global[key];
-    if (value === null || value === undefined) {
-      result[key] = 'host';
-    } else if (Object.prototype.hasOwnProperty.call(project, key)) {
-      result[key] = 'project';
-    } else if (Object.prototype.hasOwnProperty.call(global, key)) {
-      result[key] = 'global';
-    } else {
-      result[key] = 'host';
-    }
+    if (own(project, key)) result[key] = project[key] === null ? 'project (explicit default)' : 'project';
+    else if (global[key] != null) result[key] = 'global';
+    else result[key] = 'host';
   }
   return result;
-}
-
-function sameDirectory(left, right) {
-  try {
-    return realpathSync(left) === realpathSync(right);
-  } catch {
-    return left === right;
-  }
 }
 
 function addLocation(endpoint, directory) {
   return `${endpoint}?location%5Bdirectory%5D=${encodeURIComponent(directory)}`;
 }
 
-function apiCall(method, endpoint, body) {
-  const args = ['api', method.toUpperCase(), endpoint];
-  if (body !== undefined) args.push('--data', JSON.stringify(body));
-  const stdout = execFileSync('opencode', args, {
-    encoding: 'utf8',
-    timeout: 30000,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return JSON.parse(stdout);
-}
-
-async function warmLocation(directory) {
-  let sessionId = null;
+async function apiGet(run, endpoint, directory) {
   try {
-    const created = apiCall('POST', '/api/session', {
-      location: { directory },
-      title: 'Agent Office discovery',
+    const { stdout } = await run('opencode', ['api', 'get', addLocation(endpoint, directory)], {
+      encoding: 'utf8',
+      timeout: 4500,
+      maxBuffer: 8 * 1024 * 1024,
     });
-    sessionId = created?.data?.id ?? null;
-    for (let attempt = 0; attempt < 24; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const agents = await apiGet('/api/agent', directory);
-      if (Array.isArray(agents?.data) && agents.data.length > 0) return agents;
-    }
-    return null;
+    const parsed = JSON.parse(stdout);
+    const reported = parsed?.location?.directory;
+    if (typeof reported !== 'string' || await realpath(reported) !== directory) return null;
+    return parsed;
   } catch {
     return null;
-  } finally {
-    if (sessionId) {
-      try { apiCall('DELETE', `/api/session/${encodeURIComponent(sessionId)}`); } catch {}
-    }
   }
 }
 
-async function apiGet(endpoint, directory) {
-  const url = addLocation(endpoint, directory);
-  let lastError = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const stdout = execFileSync('opencode', ['api', 'get', url], {
-        encoding: 'utf8',
-        timeout: 30000,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      const parsed = JSON.parse(stdout);
-      if (!parsed || typeof parsed !== 'object' || !parsed.location || !sameDirectory(parsed.location.directory, directory)) {
-        return null;
-      }
-      return parsed;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  }
-  return null;
+function modelRef(value) {
+  const id = value?.id ?? value?.modelID;
+  if (typeof id !== 'string' || typeof value?.providerID !== 'string') return null;
+  const variant = typeof value.variant === 'string' ? value.variant : null;
+  return { id, providerID: value.providerID, ...(variant ? { variant } : {}) };
 }
 
 function sanitizeAgent(agent) {
-  if (!agent || typeof agent !== 'object' || Array.isArray(agent)) return agent;
-  const copy = { ...agent };
-  for (const key of Object.keys(copy)) {
-    if (key.toLowerCase().includes('prompt')) delete copy[key];
-  }
-  return copy;
+  if (!isRecord(agent) || typeof (agent.id ?? agent.name) !== 'string') return null;
+  return {
+    id: agent.id ?? agent.name,
+    ...(typeof agent.mode === 'string' ? { mode: agent.mode } : {}),
+    hidden: agent.hidden === true,
+    subagentOnly: agent.subagentOnly === true || agent.subagent === true,
+    model: modelRef(agent.model),
+  };
 }
 
 export async function settingsView(directory) {
+  const canonical = await realpath(directory);
   const state = await readState();
   const global = normalizeScopeSettings(state.global);
-  const project = normalizeScopeSettings(state.projects && state.projects[directory]);
+  const project = normalizeScopeSettings(state.projects[canonical] ?? state.projects[directory]);
   return {
     settings: effectiveSettings(project, global),
     sources: sourcesFor(project, global),
@@ -242,62 +211,69 @@ export async function settingsView(directory) {
   };
 }
 
-export async function inspect(directory) {
+export async function inspect(directory, options = {}) {
   if (typeof directory !== 'string' || directory.length === 0) {
     throw new Error('A project directory is required.');
   }
-
-  let agentResponse = await apiGet('/api/agent', directory);
-  if (!Array.isArray(agentResponse?.data) || agentResponse.data.length === 0) {
-    agentResponse = await warmLocation(directory);
-  }
-  const modelResponse = await apiGet('/api/model', directory);
-  const pluginResponse = await apiGet('/api/plugin', directory);
+  const canonical = await realpath(directory);
+  const run = options.run ?? runOpenCode;
+  const [agentResponse, modelResponse, pluginResponse, defaultResponse, view] = await Promise.all([
+    apiGet(run, '/api/agent', canonical),
+    apiGet(run, '/api/model', canonical),
+    apiGet(run, '/api/plugin', canonical),
+    apiGet(run, '/api/model/default', canonical),
+    settingsView(directory),
+  ]);
 
   const agents = Array.isArray(agentResponse?.data)
-    ? agentResponse.data.map(sanitizeAgent)
+    ? agentResponse.data.map(sanitizeAgent).filter(Boolean)
     : [];
 
   const models = Array.isArray(modelResponse?.data)
     ? modelResponse.data
-        .filter((model) => model && model.enabled === true)
-        .map((model) => `${model.providerID}/${model.id}`)
+        .filter((model) => model?.enabled === true)
+        .map(modelRef).filter(Boolean).map(({ providerID, id }) => `${providerID}/${id}`)
     : [];
 
-  const seenModels = new Set();
-  const uniqueModels = [];
-  for (const model of models) {
-    if (seenModels.has(model)) continue;
-    seenModels.add(model);
-    uniqueModels.push(model);
-  }
-
-  const view = await settingsView(directory);
-
-  let plugin = null;
-  if (pluginResponse && pluginResponse.location && pluginResponse.location.directory === directory) {
-    const list = Array.isArray(pluginResponse.data) ? pluginResponse.data : [];
-    plugin = list.some((item) => {
-      if (!item || typeof item !== 'object') return false;
-      if (item.id === 'agent-office') return true;
-      const source = item.source;
-      if (source && typeof source === 'object') {
-        const text = JSON.stringify(source);
-        if (text.includes('agent-office')) return true;
-      }
-      return false;
-    });
-  }
-
+  const plugin = Array.isArray(pluginResponse?.data)
+    ? pluginResponse.data.some((item) => item?.id === 'agent-office' && item.state?.status === 'active')
+    : null;
   return {
     agents,
-    models: uniqueModels,
+    models: [...new Set(models)],
+    variants: Object.fromEntries((Array.isArray(modelResponse?.data) ? modelResponse.data : [])
+      .filter(m => m?.enabled === true).map(m => [`${m.providerID}/${m.id}`, (m.variants ?? []).map(v => v.id)])),
     ...view,
     plugin,
+    agentDiscovery: !Array.isArray(agentResponse?.data) ? 'unavailable' : agents.length ? 'ready' : 'empty',
+    modelDiscovery: !Array.isArray(modelResponse?.data) ? 'unavailable' : models.length ? 'ready' : 'empty',
+    hostModel: modelRef(defaultResponse?.data),
+    rates: Object.fromEntries((Array.isArray(modelResponse?.data) ? modelResponse.data : []).filter(m => m?.enabled === true).map(m =>
+      [`${m.providerID}/${m.id}`, Array.isArray(m.cost) ? m.cost.map(({input, output, cache, tier}) => ({input, output, cache, tier})) : null])),
   };
 }
 
-export async function saveSettings(directory, scope, values) {
+async function withSettingsLock(file, fn) {
+  const lock = `${file}.lock`;
+  let handle;
+  for (let attempt = 0; !handle; attempt++) {
+    try {
+      handle = await open(lock, 'wx', 0o600);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (attempt >= 60) throw new Error('Agent Office settings are busy. Try again.');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await handle.close();
+    await unlink(lock);
+  }
+}
+
+export async function saveSettings(directory, scope, values, unset = []) {
   if (typeof directory !== 'string' || directory.length === 0) {
     throw new Error('A project directory is required.');
   }
@@ -305,26 +281,30 @@ export async function saveSettings(directory, scope, values) {
     throw new Error('Settings scope must be "global" or "project".');
   }
   const validated = validateValues(values || {});
-
-  const state = await readState();
-  if (!state.global || typeof state.global !== 'object' || Array.isArray(state.global)) state.global = {};
-  if (!state.projects || typeof state.projects !== 'object' || Array.isArray(state.projects)) state.projects = {};
-
-  if (scope === 'global') {
-    state.global = { ...state.global, ...validated };
-  } else {
-    const current = state.projects[directory];
-    const base = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
-    state.projects[directory] = { ...base, ...validated };
+  if (!Array.isArray(unset) || unset.some((key) => !SETTINGS_KEYS.includes(key) || own(validated, key))) {
+    throw new Error('Invalid inherited settings selection.');
   }
+  const canonical = await realpath(directory);
 
   const file = stateFile();
-  await mkdir(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
-  const payload = JSON.stringify(state, null, 2) + '\n';
-  await writeFile(temp, payload, 'utf8');
-  await rename(temp, file);
-  return true;
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  return withSettingsLock(file, async () => {
+    const state = await readState();
+    const current = scope === 'global' ? state.global : state.projects[canonical] ?? state.projects[directory];
+    const layer = { ...(isRecord(current) ? current : {}), ...validated };
+    for (const key of unset) delete layer[key];
+    if (scope === 'global') state.global = layer;
+    else state.projects[canonical] = layer;
+    const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+    const payload = JSON.stringify(state, null, 2) + '\n';
+    try {
+      await writeFile(temp, payload, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      await rename(temp, file);
+    } finally {
+      await unlink(temp).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+    }
+    return true;
+  });
 }
 
 export default { inspect, saveSettings, settingsView, SETTINGS_KEYS };

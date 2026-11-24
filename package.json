@@ -56,6 +56,7 @@
   "scripts": {
     "build": "openchamber-guest-bundle panel/main.ts panel/main.js && openchamber-guest-bundle background/main.ts background/main.js && openchamber-guest-bundle --node service/main.ts service/main.js && bun build plugin/source.ts --target=node --format=esm --outfile=plugin/index.js",
     "test": "bun test",
+    "test:panel": "playwright install chromium && bun test tests/panel.test.mjs",
     "check": "openchamber-guest-check"
   },
   "dependencies": {
@@ -69,5 +70,8 @@
   "homepage": "https://github.com/b4db1n/agent-office#readme",
   "bugs": {
     "url": "https://github.com/b4db1n/agent-office/issues"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0"
   }
 }

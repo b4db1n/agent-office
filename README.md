@@ -44,7 +44,8 @@ Contribution suggestions start as editable synthetic examples. Cancel to discard
 bun install --frozen-lockfile
 bun run build
 bun test
+bun run test:panel
 bun run check
 ```
 
-The extension loads the committed JavaScript bundles. When changing source, rebuild before installing or publishing. `bun test` runs the non-browser suite; the Office interaction checks need Playwright installed separately and `PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node --test tests/panel.test.mjs`. They skip when Playwright is unavailable. Do not include runtime state, personal configuration, screenshots or transcripts in a contribution.
+The extension loads the committed JavaScript bundles. When changing source, rebuild before installing or publishing. `bun test` runs the whole suite, including the Office interaction checks when Chromium is available. `bun run test:panel` installs Chromium once and runs only those checks; without the browser they skip with that command in the message. CI installs Chromium and sets `PANEL_REQUIRE_BROWSER=1`, so a missing browser fails the job instead of skipping it. Do not include runtime state, personal configuration, screenshots or transcripts in a contribution.

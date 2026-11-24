@@ -37,7 +37,18 @@ for (const candidate of playwrightCandidates.filter(Boolean)) {
     if (loaded?.chromium) { chromium = loaded.chromium; break; }
   } catch {}
 }
-const browserTest = (name, fn) => test(name, { skip: chromium ? false : 'Playwright is not installed.' }, fn);
+// A usable browser needs both the module and its downloaded Chromium binary.
+let browserAvailable = false;
+if (chromium) {
+  try {
+    browserAvailable = fs.existsSync(chromium.executablePath());
+  } catch {}
+}
+const browserSkipReason = 'Chromium is not installed. Run: bun run test:panel';
+if (!browserAvailable && process.env.PANEL_REQUIRE_BROWSER === '1') {
+  throw new Error('PANEL_REQUIRE_BROWSER=1 but Chromium is not installed. Run: bun run test:panel');
+}
+const browserTest = (name, fn) => test(name, { skip: browserAvailable ? false : browserSkipReason }, fn);
 const PANEL_URL = pathToFileURL(fileURLToPath(new URL('../panel/index.html', import.meta.url))).href + '?v=' + Date.now();
 const DIR_A = '/tmp/project-a';
 const DIR_B = '/tmp/project-b';

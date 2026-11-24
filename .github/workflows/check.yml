@@ -9,7 +9,10 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
       - run: bun test
+        env:
+          PANEL_REQUIRE_BROWSER: "1"
       - run: bun run build
       - run: git diff --exit-code -- panel/main.js service/main.js background/main.js plugin/index.js
       - run: bun run check

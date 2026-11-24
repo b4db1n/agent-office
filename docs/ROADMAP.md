@@ -29,13 +29,17 @@ discoverable and keep it exercising `service/main.js`, not a mock.
 **DONE** — 4ac28db. `bun test` now reports 146 pass across 12 files, including the
 smoke test, and the original undiscovered file is gone.
 
-### 2. The browser suite never runs
-`tests/panel.test.mjs` skips every panel test when Playwright is absent, and nothing installs
-it, so the whole UI is untested locally and on every push.
+### 2. The browser suite needs a real install path
+`tests/panel.test.mjs` runs only when a Playwright module and its Chromium binary are both
+present. A global install on this machine hid that; a fresh clone had nothing to run it.
 
 **Done when:** a documented command installs Chromium and runs the panel suite, the suite
-passes, and a deliberate break in `panel/main.ts` makes it fail. The CI job is added in the
-same pass; it counts as done only after a push proves it.
+passes, and a deliberate break in `panel/main.ts` makes it fail.
+
+**DONE** — 1c439d4. `bun run test:panel` installs Chromium and runs the 20 checks; `bun test`
+runs them when the browser exists; a missing browser skips with that command in the message,
+and `PANEL_REQUIRE_BROWSER=1` turns the skip into a failure. A deliberate label change in
+`panel/main.ts` failed 3 of the 20 checks, then was reverted. Full suite: 146 pass.
 
 ### 3. Controls that do nothing are shown as if they work
 `panel/main.ts` renders `language` and `notifications` inputs while the same file admits
@@ -73,6 +77,12 @@ runs that exact path.
 
 **Done when:** a test runs the documented command from a project directory and asserts the
 preview output; the README command is the one under test.
+
+## Waiting
+
+- **The CI browser job is written but not proven.** `.github/workflows/check.yml` installs
+  Chromium and sets `PANEL_REQUIRE_BROWSER=1` on the test step; the first push shows whether
+  it runs. Not done until that run is green.
 
 ## Owner decisions
 

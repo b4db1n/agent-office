@@ -4,11 +4,33 @@ import { mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { inspect, settingsView, saveSettings, SETTINGS_KEYS } from '../shared/settings.mjs';
+import { inspect, settingsView, saveSettings, SETTINGS_KEYS, INACTIVE_SETTINGS } from '../shared/settings.mjs';
 
 test('settings keys are exported', () => {
   assert.equal(Array.isArray(SETTINGS_KEYS), true);
   assert.equal(SETTINGS_KEYS.length, 12);
+});
+
+test('inactive settings are a distinct subset of the known keys', () => {
+  assert.ok(INACTIVE_SETTINGS.length > 0);
+  assert.equal(new Set(INACTIVE_SETTINGS).size, INACTIVE_SETTINGS.length);
+  for (const key of INACTIVE_SETTINGS) assert.ok(SETTINGS_KEYS.includes(key), `${key} is a settings key`);
+  const active = SETTINGS_KEYS.filter((key) => !INACTIVE_SETTINGS.includes(key));
+  assert.deepEqual([...active, ...INACTIVE_SETTINGS].sort(), [...SETTINGS_KEYS].sort());
+  assert.equal(active.filter((key) => INACTIVE_SETTINGS.includes(key)).length, 0);
+});
+
+test('inactive settings keep accepting already-saved values', async () => {
+  const stateDir = mkdtempSync(path.join(tmpdir(), 'office-'));
+  process.env.AGENT_OFFICE_SETTINGS_FILE = path.join(stateDir, 'settings.json');
+  const dir = process.cwd();
+  await saveSettings(dir, 'global', { language: 'en', appearance: 'dark', notifications: true, visibleControls: ['cost'] });
+  const view = await settingsView(dir);
+  assert.equal(view.global.language, 'en');
+  assert.equal(view.global.appearance, 'dark');
+  assert.equal(view.global.notifications, true);
+  assert.deepEqual(view.global.visibleControls, ['cost']);
+  delete process.env.AGENT_OFFICE_SETTINGS_FILE;
 });
 
 test('saveSettings validates departments and the advisor', async () => {

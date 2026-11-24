@@ -285,7 +285,7 @@ function withDepartmentContext(prompt, department, lessons) {
 ${block}` : text;
 }
 
-// shared/settings.mjs
+// shared/setting-keys.mjs
 var SETTINGS_KEYS = Object.freeze([
   "lead",
   "leadModel",
@@ -300,6 +300,14 @@ var SETTINGS_KEYS = Object.freeze([
   "advisor",
   "departments"
 ]);
+var INACTIVE_SETTINGS = Object.freeze([
+  "language",
+  "appearance",
+  "notifications",
+  "visibleControls"
+]);
+
+// shared/settings.mjs
 var DEFAULT_SETTINGS = Object.freeze(Object.fromEntries(SETTINGS_KEYS.map((key) => [key, null])));
 var STATE_CANDIDATES = [
   path.join(homedir2(), ".config", "agent-office", "settings.json"),

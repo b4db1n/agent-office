@@ -13,6 +13,8 @@ import { issueExample, issuePreview } from '../shared/contribution.mjs';
 import { observation, steward } from '../shared/steward.mjs';
 // @ts-ignore - shared/departments.mjs has no type declarations
 import { departmentsFor, normalizeDepartments, primaryAgents } from '../shared/departments.mjs';
+// @ts-ignore - shared/setting-keys.mjs has no type declarations
+import { INACTIVE_SETTINGS, SETTINGS_KEYS } from '../shared/setting-keys.mjs';
 
 const host = connectHost();
 const rootEl = document.querySelector<HTMLElement>('#root');
@@ -74,20 +76,8 @@ type State = {
   journalError: string;
 };
 
-const SETTINGS_KEYS = [
-  'lead',
-  'leadModel',
-  'specialistModel',
-  'agentModels',
-  'language',
-  'appearance',
-  'notifications',
-  'visibleControls',
-  'parallelism',
-  'budget',
-  'advisor',
-  'departments',
-] as const;
+/** Stored and validated, but no behaviour reads these keys yet. */
+const INACTIVE = new Set<string>(INACTIVE_SETTINGS);
 
 const state: State = {
   ready: null,
@@ -274,7 +264,7 @@ async function inspect(): Promise<void> {
 function unsetForSave(): string[] {
   const unset: string[] = [];
   for (const key of SETTINGS_KEYS) {
-    if (!settingEdits.has(key)) continue;
+    if (INACTIVE.has(key) || !settingEdits.has(key)) continue;
     const el = document.getElementById(`setting-${key}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
     if (!el) continue;
     if (!el.value.trim()) unset.push(key);
@@ -291,7 +281,7 @@ async function saveSettings(): Promise<void> {
   const values: Record<string, unknown> = {};
   const unset: string[] = [];
   for (const key of SETTINGS_KEYS) {
-    if (!settingEdits.has(key)) continue;
+    if (INACTIVE.has(key) || !settingEdits.has(key)) continue;
     const el = document.getElementById(`setting-${key}`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
     if (!el) continue;
     const raw = el.value;
@@ -740,30 +730,41 @@ function renderCostCard(): string {
   `;
 }
 
+function settingField(key: string, disabled = false): string {
+  const insp = state.inspect;
+  const layer = insp?.[state.settingsScope];
+  const val = settingEdits.get(key) ?? (isRecord(layer) ? layer[key] : undefined);
+  const valueStr =
+    typeof val === 'string'
+      ? val
+       : val === null && state.settingsScope === 'project' ? 'null' : val === null || val === undefined
+        ? ''
+        : JSON.stringify(val, null, 2);
+  const isLong = key === 'agentModels' || key === 'visibleControls';
+  const choices = key === 'lead' ? selectLead(insp?.agents ?? [], null).available
+    : ['leadModel', 'specialistModel'].includes(key) ? insp?.models ?? []
+    : key === 'notifications' ? ['true', 'false']
+    : key === 'appearance' ? ['system', 'light', 'dark']
+    : null;
+  const off = disabled ? ' disabled' : '';
+  const control = choices
+    ? `<select id="setting-${key}" class="ao-input"${off}><option value="">Inherit default</option><option value="null" ${valueStr==='null'?'selected':''}>Host default</option>${[...new Set([...choices,...(valueStr && valueStr!=='null' ? [valueStr] : [])])].map(id => `<option value="${esc(id)}" ${id === valueStr ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>`
+    : isLong
+    ? `<textarea id="setting-${key}" class="ao-textarea" placeholder="{}"${off}>${esc(valueStr)}</textarea>`
+    : `<input id="setting-${key}" class="ao-input" value="${esc(valueStr)}" placeholder="${key === 'language' ? 'en' : ''}"${off} />`;
+  return `<div class="ao-field" data-inactive="${disabled ? 'true' : 'false'}"><label for="setting-${key}">${esc(key)}</label>${control}<small>Effective: ${esc(JSON.stringify(insp?.settings?.[key]) ?? 'Host default')} · ${esc(insp?.sources?.[key] ?? 'host')}</small></div>`;
+}
+
 function renderSettings(): string {
   const insp = state.inspect;
-  const fields = SETTINGS_KEYS.filter((key) => key !== 'departments' && key !== 'advisor').map((key) => {
-    const layer = insp?.[state.settingsScope];
-    const val = settingEdits.get(key) ?? (isRecord(layer) ? layer[key] : undefined);
-    const valueStr =
-      typeof val === 'string'
-        ? val
-         : val === null && state.settingsScope === 'project' ? 'null' : val === null || val === undefined
-          ? ''
-          : JSON.stringify(val, null, 2);
-    const isLong = key === 'agentModels' || key === 'visibleControls';
-    const choices = key === 'lead' ? selectLead(insp?.agents ?? [], null).available
-      : ['leadModel', 'specialistModel'].includes(key) ? insp?.models ?? []
-      : key === 'notifications' ? ['true', 'false']
-      : key === 'appearance' ? ['system', 'light', 'dark']
-      : null;
-    const control = choices
-      ? `<select id="setting-${key}" class="ao-input"><option value="">Inherit default</option><option value="null" ${valueStr==='null'?'selected':''}>Host default</option>${[...new Set([...choices,...(valueStr && valueStr!=='null' ? [valueStr] : [])])].map(id => `<option value="${esc(id)}" ${id === valueStr ? 'selected' : ''}>${esc(id)}</option>`).join('')}</select>`
-      : isLong
-      ? `<textarea id="setting-${key}" class="ao-textarea" placeholder="{}">${esc(valueStr)}</textarea>`
-      : `<input id="setting-${key}" class="ao-input" value="${esc(valueStr)}" placeholder="${key === 'language' ? 'en' : ''}" />`;
-    return `<div class="ao-field"><label for="setting-${key}">${esc(key)}</label>${control}<small>Effective: ${esc(JSON.stringify(insp?.settings?.[key]) ?? 'Host default')} · ${esc(insp?.sources?.[key] ?? 'host')}</small></div>`;
-  }).join('');
+  const fields = SETTINGS_KEYS
+    .filter((key) => key !== 'departments' && key !== 'advisor' && !INACTIVE.has(key))
+    .map((key) => settingField(key))
+    .join('');
+  const inactiveFields = SETTINGS_KEYS
+    .filter((key) => INACTIVE.has(key))
+    .map((key) => settingField(key, true))
+    .join('');
 
   const agentsHtml = (insp?.agents ?? [])
     .map((a) => `<tr><td>${esc(a.id)}</td><td>${esc(a.mode ?? '')}</td><td>${a.hidden ? 'yes' : 'no'}</td><td>${esc(a.model ? `${a.model.providerID}/${a.model.id}${a.model.variant ? ` (${a.model.variant})` : ''}` : '')}</td></tr>`)
@@ -789,7 +790,6 @@ function renderSettings(): string {
         <p class="ao-muted">Requested lead model: ${esc(effectiveLeadModel)} (${esc(leadModelSource)}). Specialist selection is a preference, not enforced routing.</p>
         <p class="ao-muted">Office admission budget: blank inherits; null means no Office limit. A finite budget, including 0, blocks dispatch when the host cannot bound delegated costs.</p>
         <p class="ao-muted">Recorded reservations (rechecked on admission): ${insp?.reservations?.length ?? 'unknown'}. These are not observed charges.</p>
-        <p class="ao-muted">Localization and notification delivery are not implemented; appearance and visible controls use sensible defaults.</p>
         <div class="ao-row">
           <span class="ao-muted">Scope:</span>
           <button class="ao-btn ${state.settingsScope === 'global' ? 'primary' : ''}" data-scope="global">Global</button>
@@ -801,6 +801,11 @@ function renderSettings(): string {
          <div class="ao-field-grid" style="display:grid;gap:8px;">
           ${fields}
         </div>
+      </div>
+      <div class="ao-card" data-inactive-settings>
+        <h3 class="ao-title" style="font-size:13px;">Stored, not used yet</h3>
+        <p class="ao-muted">Nothing reads these settings yet, so changing them would have no effect. They stay visible and disabled so saved values are not lost; each one becomes active when the feature it configures exists.</p>
+        <details><summary>Show inactive settings</summary><div class="ao-field-grid" style="display:grid;gap:8px;">${inactiveFields}</div></details>
       </div>
       ${renderStructure()}
       <div class="ao-card">

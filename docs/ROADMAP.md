@@ -52,6 +52,12 @@ effect.
 setting is visibly marked as stored-but-inactive; a test asserts the form cannot present an
 inactive control as working.
 
+**DONE** — `shared/setting-keys.mjs` now owns the key list and marks `language`,
+`appearance`, `notifications` and `visibleControls` inactive. The panel renders them disabled
+in a **Stored, not used yet** block that says changing them has no effect, and the save path
+never sends an inactive key. `bun test` 175 pass, including 25 browser checks; the new browser
+check fails against the pre-change panel.
+
 ### 4. One corrupt settings file stops discovery
 `shared/settings.mjs` aborts the whole discovery on any error other than a missing file, so
 one unreadable layer hides every other layer.

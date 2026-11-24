@@ -529,8 +529,8 @@ browserTest('unsaved settings show a preview instead of a dispatch entry point',
   const { browser, frame } = await start({ surface: 'status', sessions: [session('root-1', null)], inspect: READY_INSPECT, coverage: READY_COVERAGE });
   try {
     await frame.locator('button[data-view="settings"]').click();
-    await frame.locator('#setting-language').waitFor({ timeout: 5000 });
-    await frame.locator('#setting-language').fill('tr');
+    await frame.locator('#setting-lead').waitFor({ timeout: 5000 });
+    await frame.locator('#setting-lead').selectOption('helper');
     await frame.getByText('Back to Work Status').click();
     await frame.getByText('Setup preview pending').waitFor({ timeout: 5000 });
     const text = await frame.locator('.ao-status').innerText();
@@ -727,6 +727,44 @@ browserTest('Settings shows effective config and saves project lead', async () =
     assert.equal(save.body.directory, DIR_A);
     assert.equal(save.body.scope, 'project');
     assert.equal(save.body.values.lead, 'helper');
+  } finally { await browser.close(); }
+});
+
+browserTest('Settings cannot present a stored-but-inactive control as working', async () => {
+  const inspect = {
+    agents: [{ id: 'lead', mode: 'primary' }, { id: 'helper', mode: 'primary' }],
+    models: ['opencode-go/beam-free', 'opencode-go/glm-5-free'],
+    settings: { lead: 'lead', leadModel: 'opencode-go/beam-free', specialistModel: 'opencode-go/glm-5-free', language: 'en' },
+    sources: { lead: 'project', leadModel: 'project', specialistModel: 'project', language: 'project' },
+    project: { lead: 'lead', language: 'en' }, global: { lead: null }, plugin: true,
+  };
+  const { browser, page, frame } = await start({ sessions: [session('root-1', null)], inspect });
+  try {
+    await frame.locator('.ao-tabs [data-view="settings"]').click();
+    await frame.locator('#setting-lead option[value="helper"]').waitFor({ state: 'attached', timeout: 5000 });
+    const block = frame.locator('[data-inactive-settings]');
+    assert.equal(await block.count(), 1);
+    assert.match(await block.innerText(), /Stored, not used yet/);
+    assert.match(await block.innerText(), /no effect/);
+    await block.locator('summary').click();
+    const inactiveKeys = ['language', 'appearance', 'notifications', 'visibleControls'];
+    for (const key of inactiveKeys) {
+      const control = block.locator(`#setting-${key}`);
+      assert.equal(await control.count(), 1, `${key} is shown once, in the inactive block`);
+      assert.equal(await control.isDisabled(), true, `${key} is disabled`);
+      assert.equal(await frame.locator(`#setting-${key}:not([disabled])`).count(), 0, `${key} has no enabled control anywhere`);
+    }
+    assert.equal(await block.locator('#setting-language').inputValue(), 'en');
+    for (const key of ['lead', 'leadModel', 'specialistModel', 'agentModels', 'parallelism', 'budget']) {
+      assert.equal(await frame.locator(`#setting-${key}:not([disabled])`).count(), 1, `${key} stays editable`);
+      assert.equal(await block.locator(`#setting-${key}`).count(), 0, `${key} is not in the inactive block`);
+    }
+    await frame.locator('#setting-lead').selectOption('helper');
+    await frame.locator('[data-action="saveSettings"]').click();
+    await page.waitForFunction(() => window.__serviceRequests.some(r => r.path === '/settings'));
+    const save = await page.evaluate(() => window.__serviceRequests.filter(r => r.path === '/settings').pop());
+    assert.deepEqual(Object.keys(save.body.values), ['lead']);
+    assert.deepEqual(save.body.unset ?? [], []);
   } finally { await browser.close(); }
 });
 

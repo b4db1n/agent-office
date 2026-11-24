@@ -8,21 +8,9 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { runOpenCode } from './host.mjs';
 import { normalizeDepartments } from './departments.mjs';
+import { INACTIVE_SETTINGS, SETTINGS_KEYS } from './setting-keys.mjs';
 
-export const SETTINGS_KEYS = Object.freeze([
-  'lead',
-  'leadModel',
-  'specialistModel',
-  'agentModels',
-  'language',
-  'appearance',
-  'notifications',
-  'visibleControls',
-  'parallelism',
-  'budget',
-  'advisor',
-  'departments',
-]);
+export { INACTIVE_SETTINGS, SETTINGS_KEYS };
 
 const DEFAULT_SETTINGS = Object.freeze(
   Object.fromEntries(SETTINGS_KEYS.map((key) => [key, null])),
